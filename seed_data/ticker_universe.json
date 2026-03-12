@@ -1,0 +1,9 @@
+[
+  {
+    "symbol": "SPY",
+    "name": "SPDR S&P 500 ETF",
+    "sector": "Index",
+    "description": "Tracks S&P 500. Most liquid options market. Use for broad market exposure or hedging.",
+    "characteristics": "High liquidity, tight spreads, tracks overall market health"
+  }
+]

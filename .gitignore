@@ -1,0 +1,42 @@
+# Secrets (use .env.example as template)
+.env
+.mcp.json
+.claude/settings.local.json
+
+# Runtime config (contains account secrets - use dashboard to configure)
+data/agent-config.json
+
+# Logs
+*.log
+*.pid
+
+# Cartogopher cache
+bakes/
+fast.yaml
+
+# Build artifacts
+prophet_bot
+prophet-trader-bot
+prophet-trader
+prophet-bot
+main
+
+# Archives
+.archive_*
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Data
+data/*.db
+data/*.db-*
+
+# Node
+node_modules/
+
+# News summary cache
+news_summaries/*.json

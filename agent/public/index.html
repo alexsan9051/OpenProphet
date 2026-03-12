@@ -1,0 +1,1316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Prophet Agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #faf9f6;
+      --paper-dark: #f3f2ed;
+      --paper-darker: #eae9e3;
+      --ink: #2d2d2d;
+      --ink-light: #3d3d3d;
+      --ink-muted: #5c5c5c;
+      --ink-faint: #8a8a8a;
+      --accent: #3d5a80;
+      --accent-dark: #2c4259;
+      --accent-light: #5a7a9e;
+      --success: #3a6b4a;
+      --success-bg: #f4f9f5;
+      --error: #a64d4d;
+      --error-bg: #fdf6f6;
+      --warning: #8a6d3b;
+      --warning-bg: #fdf8f0;
+      --rule: #d8d7d0;
+      --rule-light: #e8e7e0;
+      --code-bg: #f5f4ef;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Source Sans 3', Helvetica Neue, sans-serif;
+      background: var(--paper);
+      color: var(--ink);
+      height: 100dvh;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    /* Paper texture */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      pointer-events: none;
+      opacity: 0.03;
+      background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+
+    /* ── Layout ─────────────────────────── */
+    .app { display: flex; flex-direction: column; height: 100dvh; }
+
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--rule);
+      background: var(--paper);
+      min-height: 56px;
+      flex-shrink: 0;
+    }
+    .topbar-left { display: flex; align-items: center; gap: 14px; }
+    .logo { font-family: 'Crimson Pro', Georgia, serif; font-size: 22px; font-weight: 700; color: var(--ink); letter-spacing: -0.5px; }
+    .logo span { color: var(--accent); }
+
+    .phase-badge {
+      padding: 3px 10px; font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1px; border: 1px solid var(--rule); color: var(--ink-muted);
+    }
+    .phase-badge.open { border-color: var(--success); color: var(--success); background: var(--success-bg); }
+    .phase-badge.pre { border-color: var(--warning); color: var(--warning); background: var(--warning-bg); }
+    .phase-badge.close { border-color: var(--error); color: var(--error); background: var(--error-bg); }
+
+    .topbar-right { display: flex; align-items: center; gap: 10px; }
+    .clock { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink-muted); }
+
+    .status-pill {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 12px; font-size: 12px; font-weight: 600;
+      border: 1px solid var(--rule);
+    }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint); }
+    .status-dot.running { background: var(--success); animation: pulse 2s ease-in-out infinite; }
+    .status-dot.paused { background: var(--warning); }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+
+    /* ── Tab Navigation ─────────────────── */
+    .tabs {
+      display: flex; border-bottom: 1px solid var(--rule); background: var(--paper);
+      overflow-x: auto; flex-shrink: 0;
+      -webkit-overflow-scrolling: touch;
+    }
+    .tab {
+      padding: 10px 14px; font-size: 12px; font-weight: 600; color: var(--ink-muted);
+      border: none; background: none; cursor: pointer; white-space: nowrap;
+      border-bottom: 2px solid transparent; transition: all 0.15s;
+      font-family: inherit; flex-shrink: 0;
+    }
+    .tab-short { display: none; }
+    @media (max-width: 600px) {
+      .tab { padding: 9px 10px; font-size: 11px; letter-spacing: -0.2px; }
+      .tab-full { display: none; }
+      .tab-short { display: inline; }
+    }
+    .tab:hover { color: var(--ink-light); }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ── Panels ─────────────────────────── */
+    .panel-container { flex: 1; overflow: hidden; position: relative; }
+    .panel { display: none; height: 100%; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    .panel.active { display: block; height: 100%; overflow-y: auto; }
+
+    /* ── Terminal Panel ──────────────────── */
+    .terminal-panel { display: none; flex-direction: column; height: 100%; overflow: hidden; }
+    .terminal-panel.active { display: flex; height: 100%; }
+
+    .terminal-split {
+      display: flex; flex: 1; overflow: hidden; min-height: 0;
+    }
+
+    .terminal {
+      flex: 1; overflow-y: auto; padding: 12px 16px;
+      background: var(--paper); font-family: 'IBM Plex Mono', monospace;
+      -webkit-overflow-scrolling: touch; min-height: 0;
+    }
+    .terminal::-webkit-scrollbar { width: 4px; }
+    .terminal::-webkit-scrollbar-thumb { background: var(--rule); }
+
+    .log-entry { padding: 3px 0; font-size: 12px; line-height: 1.65; word-break: break-word; overflow-wrap: break-word; }
+    .log-entry .time { color: var(--ink-faint); margin-right: 8px; font-size: 10.5px; }
+    .log-entry.thought { color: var(--ink-muted); font-style: italic; }
+    .log-entry.info { color: var(--ink-light); }
+    .log-entry.success { color: var(--success); }
+    .log-entry.warning { color: var(--warning); }
+    .log-entry.error { color: var(--error); }
+    .log-entry.tool { color: var(--accent); }
+    .log-entry.text { color: var(--ink); }
+    .log-entry.beat { color: var(--accent); font-weight: 600; border-bottom: 1px solid var(--rule-light); margin-top: 10px; padding-bottom: 5px; }
+    .log-entry.heartbeat { color: var(--accent-light); }
+    .tool-name { color: var(--accent); font-weight: 600; }
+    .tool-args { color: var(--ink-faint); font-size: 10.5px; }
+
+    /* ── Terminal Search ──────────────── */
+    .terminal-search-bar {
+      display: flex; gap: 8px; padding: 6px 12px;
+      border-bottom: 1px solid var(--rule); background: var(--paper-dark);
+      flex-shrink: 0; align-items: center;
+    }
+    .terminal-search-bar input {
+      flex: 1; padding: 5px 10px; border: 1px solid var(--rule);
+      background: var(--paper); color: var(--ink); font-family: 'IBM Plex Mono', monospace;
+      font-size: 12px;
+    }
+    .terminal-search-bar input:focus { outline: none; border-color: var(--accent); }
+    .terminal-search-bar input::placeholder { color: var(--ink-faint); }
+    .terminal-search-bar select {
+      padding: 5px 8px; border: 1px solid var(--rule); background: var(--paper);
+      color: var(--ink); font-size: 12px; font-family: 'Source Sans 3', sans-serif;
+    }
+    .terminal-search-bar .search-count {
+      font-size: 11px; color: var(--ink-faint); font-family: 'IBM Plex Mono', monospace;
+      white-space: nowrap; min-width: 50px; text-align: right;
+    }
+    .terminal-search-bar .btn-clear {
+      padding: 4px 8px; font-size: 11px; border: 1px solid var(--rule);
+      background: var(--paper); color: var(--ink-muted); cursor: pointer;
+      font-family: 'Source Sans 3', sans-serif;
+    }
+    .terminal-search-bar .btn-clear:hover { background: var(--paper-dark); border-color: var(--ink-muted); }
+    .log-entry.search-hidden { display: none; }
+    .log-entry.search-highlight { background: rgba(61,90,128,0.08); }
+
+    /* ── Chat Input ────────────────────── */
+    .chat-input-bar {
+      display: flex; gap: 8px; padding: 8px 12px;
+      border-top: 1px solid var(--rule); background: var(--paper-dark);
+      flex-shrink: 0;
+    }
+    .chat-input-bar input {
+      flex: 1; padding: 8px 12px; border: 1px solid var(--rule);
+      background: var(--paper); color: var(--ink); font-family: 'IBM Plex Mono', monospace;
+      font-size: 13px;
+    }
+    .chat-input-bar input:focus { outline: none; border-color: var(--accent); }
+    .chat-input-bar input::placeholder { color: var(--ink-faint); }
+    .chat-input-bar button { flex-shrink: 0; }
+    .log-entry.user { color: var(--accent); font-weight: 600; }
+    .log-entry.user::before { content: '> '; color: var(--accent); }
+
+    /* ── Sidebar (desktop) ──────────────── */
+    .sidebar {
+      width: 320px; border-left: 1px solid var(--rule); background: var(--paper-dark);
+      overflow-y: auto; padding: 16px; flex-shrink: 0;
+      -webkit-overflow-scrolling: touch;
+    }
+    .sidebar::-webkit-scrollbar { width: 4px; }
+    .sidebar::-webkit-scrollbar-thumb { background: var(--rule); }
+
+    .section { margin-bottom: 20px; }
+    .section-title {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1.5px; color: var(--ink-muted); margin-bottom: 10px;
+      padding-bottom: 6px; border-bottom: 1px solid var(--rule-light);
+    }
+    .stat-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+    .stat-label { color: var(--ink-muted); }
+    .stat-value { font-family: 'IBM Plex Mono', monospace; font-weight: 500; font-size: 13px; }
+    .stat-value.positive { color: var(--success); }
+    .stat-value.negative { color: var(--error); }
+
+    .card {
+      background: var(--paper); border: 1px solid var(--rule); padding: 10px;
+      margin-bottom: 8px; transition: border-color 0.2s;
+    }
+    .card:hover { border-color: var(--ink-muted); }
+    .card .symbol { font-weight: 700; color: var(--accent); font-size: 13px; }
+    .card .pnl { font-family: 'IBM Plex Mono', monospace; font-weight: 500; font-size: 13px; }
+
+    .hb-bar {
+      background: var(--paper); border: 1px solid var(--rule); padding: 10px; margin-top: 8px;
+    }
+    .hb-progress { height: 3px; background: var(--rule-light); margin-top: 8px; overflow: hidden; }
+    .hb-fill { height: 100%; background: var(--accent); transition: width 1s linear; }
+
+    .no-data { color: var(--ink-faint); font-size: 12px; font-style: italic; padding: 8px 0; }
+
+    /* ── Form Elements ──────────────────── */
+    .btn {
+      padding: 8px 16px; border: 1px solid var(--rule); background: var(--paper);
+      color: var(--ink); font-family: 'Source Sans 3', sans-serif; font-size: 13px;
+      font-weight: 600; cursor: pointer; transition: all 0.15s;
+    }
+    .btn:hover { background: var(--paper-dark); border-color: var(--ink-muted); }
+    .btn:active { transform: translateY(1px); }
+    .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn.primary:hover { background: var(--accent-dark); }
+    .btn.danger { border-color: var(--error); color: var(--error); }
+    .btn.danger:hover { background: var(--error-bg); }
+    .btn.sm { padding: 5px 10px; font-size: 12px; }
+    .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    input[type="text"], input[type="number"], input[type="password"], select, textarea {
+      width: 100%; padding: 8px 12px; border: 1px solid var(--rule);
+      background: var(--paper); color: var(--ink); font-family: 'Source Sans 3', sans-serif;
+      font-size: 14px; transition: border-color 0.15s;
+    }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+    textarea { font-family: 'IBM Plex Mono', monospace; font-size: 13px; resize: vertical; min-height: 120px; }
+
+    label { display: block; font-size: 12px; font-weight: 600; color: var(--ink-muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+    .form-group { margin-bottom: 16px; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .form-hint { font-size: 11px; color: var(--ink-faint); margin-top: 3px; }
+
+    /* ── Settings Panels ────────────────── */
+    .settings-content { padding: 20px; max-width: 800px; padding-bottom: 80px; }
+    .settings-content h2 { font-family: 'Crimson Pro', serif; font-size: 24px; font-weight: 600; margin-bottom: 4px; }
+    .settings-content p.subtitle { color: var(--ink-muted); font-size: 14px; margin-bottom: 20px; }
+
+    .config-card {
+      background: var(--paper); border: 1px solid var(--rule); padding: 16px;
+      margin-bottom: 12px; transition: border-color 0.2s;
+    }
+    .config-card:hover { border-color: var(--ink-muted); }
+    .config-card.active-card { border-color: var(--accent); border-width: 2px; }
+    .config-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .config-card-title { font-weight: 700; font-size: 15px; }
+    .config-card-desc { font-size: 13px; color: var(--ink-muted); }
+    .config-card-meta { font-size: 11px; color: var(--ink-faint); font-family: 'IBM Plex Mono', monospace; margin-top: 6px; }
+    .config-card-actions { display: flex; gap: 6px; margin-top: 10px; }
+
+    .badge {
+      display: inline-block; padding: 2px 8px; font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.5px; border: 1px solid;
+    }
+    .badge.active { border-color: var(--success); color: var(--success); background: var(--success-bg); }
+    .badge.paper { border-color: var(--warning); color: var(--warning); background: var(--warning-bg); }
+    .badge.live { border-color: var(--error); color: var(--error); background: var(--error-bg); }
+
+    /* ── Trade Feed ──────────────────────── */
+    .trade-card {
+      background: var(--paper); border: 1px solid var(--rule); padding: 12px;
+      margin-bottom: 8px;
+    }
+    .trade-card .trade-header { display: flex; justify-content: space-between; align-items: center; }
+    .trade-card .trade-symbol { font-weight: 700; color: var(--accent); font-size: 14px; }
+    .trade-card .trade-side { font-size: 11px; font-weight: 700; text-transform: uppercase; }
+    .trade-card .trade-side.buy { color: var(--success); }
+    .trade-card .trade-side.sell { color: var(--error); }
+    .trade-card .trade-details { font-size: 12px; color: var(--ink-muted); margin-top: 4px; }
+    .trade-card .trade-time { font-size: 11px; color: var(--ink-faint); font-family: 'IBM Plex Mono', monospace; }
+
+    /* ── Modal ───────────────────────────── */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0; background: rgba(45,45,45,0.4); z-index: 1000;
+      align-items: center; justify-content: center; padding: 20px;
+    }
+    .modal-overlay.visible { display: flex; }
+    .modal {
+      background: var(--paper); border: 1px solid var(--rule); max-width: 560px; width: 100%;
+      max-height: 80vh; overflow-y: auto; padding: 24px;
+    }
+    .modal h3 { font-family: 'Crimson Pro', serif; font-size: 20px; margin-bottom: 16px; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+
+    /* ── Footer Bar ─────────────────────── */
+    .footer {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 20px; border-top: 1px solid var(--rule); background: var(--paper-dark);
+      font-size: 11px; color: var(--ink-faint); flex-shrink: 0;
+      font-family: 'IBM Plex Mono', monospace;
+    }
+    .footer-left { display: flex; gap: 16px; }
+    .footer-right { display: flex; align-items: center; gap: 8px; }
+    .footer input {
+      width: 55px; padding: 3px 6px; font-size: 11px; text-align: center;
+      font-family: 'IBM Plex Mono', monospace;
+    }
+
+    /* ── Mobile ──────────────────────────── */
+    @media (max-width: 768px) {
+      .topbar { padding: 10px 14px; }
+      .logo { font-size: 18px; }
+      .clock { display: none; }
+      .sidebar { display: none; }
+      .terminal-split { flex-direction: column; }
+      .tab { padding: 10px 14px; font-size: 12px; }
+      .settings-content { padding: 14px; }
+      .form-row { grid-template-columns: 1fr; }
+      .modal { margin: 10px; padding: 16px; max-height: 90vh; }
+      .footer { padding: 6px 14px; }
+      .footer-right { display: none; }
+      /* Show portfolio tab on mobile instead of sidebar */
+      .tab-portfolio-mobile { display: inline-flex !important; }
+    }
+    @media (min-width: 769px) {
+      .tab-portfolio-mobile { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+  <!-- Top Bar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <span class="logo"><span>Prophet</span></span>
+      <span class="phase-badge" id="phase-badge">OFFLINE</span>
+    </div>
+    <div class="topbar-right">
+      <span class="clock" id="clock"></span>
+      <div class="status-pill">
+        <div class="status-dot" id="status-dot"></div>
+        <span id="status-text">Stopped</span>
+      </div>
+      <button class="btn primary sm" id="btn-start" onclick="startAgent()">Start</button>
+      <button class="btn sm" id="btn-pause" onclick="pauseAgent()" style="display:none">Pause</button>
+      <button class="btn sm" id="btn-resume" onclick="resumeAgent()" style="display:none">Resume</button>
+      <button class="btn danger sm" id="btn-stop" onclick="stopAgent()" style="display:none">Stop</button>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab active" data-tab="terminal" onclick="switchTab('terminal')"><span class="tab-full">Terminal</span><span class="tab-short">Term</span></button>
+    <button class="tab" data-tab="trades" onclick="switchTab('trades')">Trades</button>
+    <button class="tab tab-portfolio-mobile" data-tab="portfolio" onclick="switchTab('portfolio')"><span class="tab-full">Portfolio</span><span class="tab-short">Port</span></button>
+    <button class="tab" data-tab="agents" onclick="switchTab('agents')">Agents</button>
+    <button class="tab" data-tab="strategies" onclick="switchTab('strategies')"><span class="tab-full">Strategies</span><span class="tab-short">Strats</span></button>
+    <button class="tab" data-tab="accounts" onclick="switchTab('accounts')"><span class="tab-full">Accounts</span><span class="tab-short">Accts</span></button>
+    <button class="tab" data-tab="plugins" onclick="switchTab('plugins')"><span class="tab-full">Plugins</span><span class="tab-short">Plug</span></button>
+    <button class="tab" data-tab="settings" onclick="switchTab('settings')"><span class="tab-full">Settings</span><span class="tab-short">&#9881;</span></button>
+  </div>
+
+  <!-- Panel Container -->
+  <div class="panel-container">
+
+    <!-- Terminal Panel -->
+    <div class="terminal-panel active" id="panel-terminal">
+      <div class="terminal-search-bar">
+        <input type="text" id="terminal-search" placeholder="Search logs..." oninput="filterTerminal()" autocomplete="off">
+        <select id="terminal-level-filter" onchange="filterTerminal()">
+          <option value="all">All levels</option>
+          <option value="text">Text</option>
+          <option value="tool">Tools</option>
+          <option value="info">Info</option>
+          <option value="success">Success</option>
+          <option value="warning">Warning</option>
+          <option value="error">Error</option>
+          <option value="beat">Beats</option>
+          <option value="user">User</option>
+        </select>
+        <span class="search-count" id="search-count"></span>
+        <button class="btn-clear" onclick="clearTerminalSearch()" title="Clear search">Clear</button>
+      </div>
+      <div class="terminal-split">
+        <div class="terminal" id="terminal">
+          <div class="log-entry info"><span class="time">--:--:--</span>Prophet Agent ready. Press Start to begin autonomous trading.</div>
+        </div>
+        <div class="sidebar" id="sidebar-desktop">
+          <div class="section">
+            <div class="section-title">Account</div>
+            <div class="stat-row"><span class="stat-label">Portfolio</span><span class="stat-value" id="portfolio-value">--</span></div>
+            <div class="stat-row"><span class="stat-label">Cash</span><span class="stat-value" id="cash-value">--</span></div>
+            <div class="stat-row"><span class="stat-label">Buying Power</span><span class="stat-value" id="bp-value">--</span></div>
+            <div class="stat-row"><span class="stat-label">Day P&L</span><span class="stat-value" id="day-pnl">--</span></div>
+          </div>
+          <div class="section">
+            <div class="section-title">Heartbeat</div>
+            <div class="hb-bar">
+              <div class="stat-row"><span class="stat-label">Interval</span><span class="stat-value" id="hb-interval">--</span></div>
+              <div class="stat-row"><span class="stat-label">Next</span><span class="stat-value" id="hb-next">--</span></div>
+              <div class="stat-row"><span class="stat-label">Beat #</span><span class="stat-value" id="hb-count">0</span></div>
+              <div class="hb-progress"><div class="hb-fill" id="hb-fill" style="width:0%"></div></div>
+            </div>
+          </div>
+          <div class="section">
+            <div class="section-title">Positions</div>
+            <div id="positions-container"><div class="no-data">No positions</div></div>
+          </div>
+          <div class="section">
+            <div class="section-title">Stats</div>
+            <div class="stat-row"><span class="stat-label">Beats</span><span class="stat-value" id="stat-beats">0</span></div>
+            <div class="stat-row"><span class="stat-label">Tool Calls</span><span class="stat-value" id="stat-tools">0</span></div>
+            <div class="stat-row"><span class="stat-label">Trades</span><span class="stat-value" id="stat-trades">0</span></div>
+            <div class="stat-row"><span class="stat-label">Errors</span><span class="stat-value" id="stat-errors">0</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="chat-input-bar">
+        <input type="text" id="chat-input" placeholder="Tell the agent something..." onkeydown="if(event.key==='Enter')sendMessage()" autocomplete="off">
+        <button class="btn primary sm" onclick="sendMessage()">Send</button>
+      </div>
+    </div>
+
+    <!-- Trades Panel -->
+    <div class="panel" id="panel-trades">
+      <div class="settings-content">
+        <h2>Live Trades</h2>
+        <p class="subtitle">Real-time order activity from the agent</p>
+        <div id="trades-feed"><div class="no-data">No trades yet. Start the agent to see live activity.</div></div>
+      </div>
+    </div>
+
+    <!-- Portfolio Panel (mobile) -->
+    <div class="panel" id="panel-portfolio">
+      <div class="settings-content">
+        <h2>Portfolio</h2>
+        <div class="section">
+          <div class="stat-row"><span class="stat-label">Portfolio Value</span><span class="stat-value" id="m-portfolio">--</span></div>
+          <div class="stat-row"><span class="stat-label">Cash</span><span class="stat-value" id="m-cash">--</span></div>
+          <div class="stat-row"><span class="stat-label">Buying Power</span><span class="stat-value" id="m-bp">--</span></div>
+          <div class="stat-row"><span class="stat-label">Day P&L</span><span class="stat-value" id="m-pnl">--</span></div>
+        </div>
+        <div class="section">
+          <div class="section-title">Positions</div>
+          <div id="m-positions"><div class="no-data">No positions</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Agents Panel -->
+    <div class="panel" id="panel-agents">
+      <div class="settings-content">
+        <h2>Agent Personas</h2>
+        <p class="subtitle">Configure trading personalities with custom prompts and strategies</p>
+        <div class="btn-group" style="margin-bottom:16px">
+          <button class="btn primary sm" onclick="showModal('agent-create')">New Agent</button>
+        </div>
+        <div id="agents-list"></div>
+      </div>
+    </div>
+
+    <!-- Strategies Panel -->
+    <div class="panel" id="panel-strategies">
+      <div class="settings-content">
+        <h2>Trading Strategies</h2>
+        <p class="subtitle">Define rule sets and trading parameters</p>
+        <div class="btn-group" style="margin-bottom:16px">
+          <button class="btn primary sm" onclick="showModal('strategy-create')">New Strategy</button>
+        </div>
+        <div id="strategies-list"></div>
+      </div>
+    </div>
+
+    <!-- Accounts Panel -->
+    <div class="panel" id="panel-accounts">
+      <div class="settings-content">
+        <h2>Trading Accounts</h2>
+        <p class="subtitle">Manage Alpaca API connections</p>
+        <div class="btn-group" style="margin-bottom:16px">
+          <button class="btn primary sm" onclick="showModal('account-create')">Add Account</button>
+        </div>
+        <div id="accounts-list"></div>
+      </div>
+    </div>
+
+    <!-- Plugins Panel -->
+    <div class="panel" id="panel-plugins">
+      <div class="settings-content">
+        <h2>Plugins</h2>
+        <p class="subtitle">Integrations and notification channels</p>
+
+        <div class="section">
+          <div class="section-title">Slack Notifications</div>
+          <div class="config-card">
+            <div class="config-card-header">
+              <span class="config-card-title">Slack</span>
+              <span class="badge" id="slack-badge" style="border-color:var(--ink-faint);color:var(--ink-faint)">Disabled</span>
+            </div>
+            <div class="config-card-desc">Send trade notifications, alerts, and daily summaries to Slack</div>
+            <div style="margin-top:16px">
+              <div class="form-group">
+                <label><input type="checkbox" id="slack-enabled" onchange="saveSlackConfig()"> Enable Slack Notifications</label>
+              </div>
+              <div class="form-group">
+                <label>Webhook URL</label>
+                <input type="text" id="slack-webhook" placeholder="https://hooks.slack.com/services/T.../B.../..." onchange="saveSlackConfig()">
+                <div class="form-hint">Create an incoming webhook at api.slack.com/apps</div>
+              </div>
+              <div class="form-group">
+                <label>Channel Override (optional)</label>
+                <input type="text" id="slack-channel" placeholder="#trading-alerts" onchange="saveSlackConfig()">
+              </div>
+              <div class="section-title" style="margin-top:16px">Notify On</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+                <label style="text-transform:none;font-weight:400;font-size:13px"><input type="checkbox" id="slack-n-trade" checked onchange="saveSlackConfig()"> Trade Executed</label>
+                <label style="text-transform:none;font-weight:400;font-size:13px"><input type="checkbox" id="slack-n-startstop" checked onchange="saveSlackConfig()"> Agent Start/Stop</label>
+                <label style="text-transform:none;font-weight:400;font-size:13px"><input type="checkbox" id="slack-n-errors" checked onchange="saveSlackConfig()"> Errors</label>
+                <label style="text-transform:none;font-weight:400;font-size:13px"><input type="checkbox" id="slack-n-daily" checked onchange="saveSlackConfig()"> Daily Summary</label>
+                <label style="text-transform:none;font-weight:400;font-size:13px"><input type="checkbox" id="slack-n-open" checked onchange="saveSlackConfig()"> Position Opened</label>
+                <label style="text-transform:none;font-weight:400;font-size:13px"><input type="checkbox" id="slack-n-close" checked onchange="saveSlackConfig()"> Position Closed</label>
+                <label style="text-transform:none;font-weight:400;font-size:13px"><input type="checkbox" id="slack-n-hb" onchange="saveSlackConfig()"> Every Heartbeat</label>
+              </div>
+              <div class="config-card-actions" style="margin-top:16px">
+                <button class="btn primary sm" onclick="testSlack()">Send Test Message</button>
+                <span id="slack-test-result" style="font-size:12px;color:var(--ink-faint);margin-left:8px"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section" style="margin-top:24px">
+          <div class="section-title">More Plugins Coming</div>
+          <div class="config-card" style="opacity:0.5">
+            <div class="config-card-header"><span class="config-card-title">Discord</span><span class="badge" style="border-color:var(--ink-faint);color:var(--ink-faint)">Coming Soon</span></div>
+            <div class="config-card-desc">Discord webhook notifications</div>
+          </div>
+          <div class="config-card" style="opacity:0.5">
+            <div class="config-card-header"><span class="config-card-title">Telegram</span><span class="badge" style="border-color:var(--ink-faint);color:var(--ink-faint)">Coming Soon</span></div>
+            <div class="config-card-desc">Telegram bot notifications</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Panel -->
+    <div class="panel" id="panel-settings">
+      <div class="settings-content">
+        <h2>Settings</h2>
+        <p class="subtitle">Model, heartbeat, permissions, and authentication</p>
+
+        <div class="section">
+          <div class="section-title">Claude Authentication</div>
+          <div class="config-card" id="auth-card">
+            <div class="config-card-header">
+              <span class="config-card-title">Claude CLI</span>
+              <span class="badge" id="auth-badge" style="border-color:var(--ink-faint);color:var(--ink-faint)">Checking...</span>
+            </div>
+            <div class="config-card-desc" id="auth-desc">Checking authentication status...</div>
+            <div class="config-card-actions">
+              <button class="btn primary sm" id="auth-login-btn" onclick="triggerLogin()" style="display:none">Login with Browser</button>
+              <button class="btn sm danger" id="auth-logout-btn" onclick="triggerLogout()" style="display:none">Logout</button>
+            </div>
+            <div id="auth-url-container" style="display:none;margin-top:12px">
+              <label>Open this URL to authenticate:</label>
+              <div style="background:var(--code-bg);border:1px solid var(--rule);padding:8px;font-family:'IBM Plex Mono',monospace;font-size:11px;word-break:break-all;margin-top:4px;user-select:all">
+                <a id="auth-url-link" href="#" target="_blank" style="color:var(--accent)"></a>
+              </div>
+              <div class="form-hint" style="margin-top:6px">Tap the link to open in browser, or copy and paste it</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section" style="margin-top:20px">
+          <div class="section-title">Claude Model</div>
+          <div id="models-list"></div>
+        </div>
+
+        <div class="section" style="margin-top:24px">
+          <div class="section-title">Heartbeat Intervals</div>
+          <p style="font-size:13px;color:var(--ink-muted);margin-bottom:12px">Seconds between agent heartbeats per market phase</p>
+          <div class="config-card">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px" id="heartbeat-grid">
+              <div class="form-group"><label>Pre-Market</label><input type="number" id="hb-pre_market" min="30" max="3600" onchange="saveHeartbeat()"></div>
+              <div class="form-group"><label>Market Open</label><input type="number" id="hb-market_open" min="30" max="3600" onchange="saveHeartbeat()"></div>
+              <div class="form-group"><label>Midday</label><input type="number" id="hb-midday" min="30" max="3600" onchange="saveHeartbeat()"></div>
+              <div class="form-group"><label>Market Close</label><input type="number" id="hb-market_close" min="30" max="3600" onchange="saveHeartbeat()"></div>
+              <div class="form-group"><label>After Hours</label><input type="number" id="hb-after_hours" min="60" max="7200" onchange="saveHeartbeat()"></div>
+              <div class="form-group"><label>Closed</label><input type="number" id="hb-closed" min="60" max="7200" onchange="saveHeartbeat()"></div>
+            </div>
+            <div class="form-hint">Agent can override these dynamically via set_heartbeat tool. Values in seconds.</div>
+          </div>
+        </div>
+
+        <div class="section" style="margin-top:24px">
+          <div class="section-title">Agent Permissions &amp; Guardrails</div>
+          <p style="font-size:13px;color:var(--ink-muted);margin-bottom:12px">Control what the agent is allowed to do</p>
+          <div class="config-card">
+            <div class="section-title" style="font-size:12px;margin-bottom:12px">Trading Controls</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">
+              <label style="text-transform:none;font-weight:400;font-size:13px"><input type="checkbox" id="perm-live" onchange="savePermissions()"> Allow Live Trading</label>
+              <label style="text-transform:none;font-weight:400;font-size:13px"><input type="checkbox" id="perm-options" onchange="savePermissions()"> Allow Options</label>
+              <label style="text-transform:none;font-weight:400;font-size:13px"><input type="checkbox" id="perm-stocks" onchange="savePermissions()"> Allow Stocks</label>
+              <label style="text-transform:none;font-weight:400;font-size:13px"><input type="checkbox" id="perm-0dte" onchange="savePermissions()"> Allow 0DTE</label>
+              <label style="text-transform:none;font-weight:400;font-size:13px"><input type="checkbox" id="perm-confirm" onchange="savePermissions()"> Require Confirmation</label>
+            </div>
+            <div class="section-title" style="font-size:12px;margin-bottom:12px">Risk Limits</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div class="form-group"><label>Max Position Size (%)</label><input type="number" id="perm-maxpos" min="1" max="100" onchange="savePermissions()"></div>
+              <div class="form-group"><label>Max Deployed (%)</label><input type="number" id="perm-maxdeploy" min="1" max="100" onchange="savePermissions()"></div>
+              <div class="form-group"><label>Max Daily Loss (%)</label><input type="number" id="perm-maxloss" min="1" max="50" onchange="savePermissions()"></div>
+              <div class="form-group"><label>Max Open Positions</label><input type="number" id="perm-maxopen" min="1" max="50" onchange="savePermissions()"></div>
+              <div class="form-group"><label>Max Order Value ($)</label><input type="number" id="perm-maxorder" min="0" max="1000000" step="100" onchange="savePermissions()"><div class="form-hint">0 = unlimited</div></div>
+              <div class="form-group"><label>Max Tool Rounds/Beat</label><input type="number" id="perm-maxtools" min="5" max="100" onchange="savePermissions()"></div>
+            </div>
+            <div class="section-title" style="font-size:12px;margin-top:16px;margin-bottom:8px">Tool Access</div>
+            <div class="form-group">
+              <label>Blocked Tools (comma-separated)</label>
+              <input type="text" id="perm-blocked" placeholder="e.g. place_order, close_position" onchange="savePermissions()">
+              <div class="form-hint">Leave empty to allow all tools. Block specific tools by name.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section" style="margin-top:24px">
+          <div class="section-title">System Prompt Preview</div>
+          <p style="font-size:13px;color:var(--ink-muted);margin-bottom:8px">The active agent's prompt that gets sent to Claude</p>
+          <div id="prompt-preview" style="background:var(--code-bg);border:1px solid var(--rule);padding:12px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:1.6;max-height:400px;overflow-y:auto;white-space:pre-wrap;color:var(--ink-light)">Select an agent to preview its prompt.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <div class="footer-left">
+      <span>SSE: <span id="sse-status" style="color:var(--success)">connecting</span></span>
+      <span>Bot: <span id="bot-status">--</span></span>
+      <span>Model: <span id="footer-model">--</span></span>
+    </div>
+    <div class="footer-right">
+      <span>Override:</span>
+      <input type="number" id="hb-override" placeholder="sec" min="30" max="3600">
+      <button class="btn sm" onclick="overrideHeartbeat()">Set</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="if(event.target===this)closeModal()">
+  <div class="modal" id="modal-content"></div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────
+let config = { accounts: [], agents: [], strategies: [], models: [] };
+let autoScroll = true;
+let nextBeatTime = null, heartbeatSeconds = 0, progressInterval = null;
+const terminal = document.getElementById('terminal');
+
+terminal.addEventListener('scroll', () => {
+  autoScroll = terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 50;
+});
+
+// ── Tab switching ──────────────────────────
+function switchTab(id) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
+  document.querySelectorAll('.panel, .terminal-panel').forEach(p => p.classList.remove('active'));
+  const panel = document.getElementById('panel-' + id);
+  if (panel) panel.classList.add('active');
+}
+
+// ── Terminal logging ───────────────────────
+function log(text, level = 'info') {
+  const el = document.createElement('div');
+  el.className = 'log-entry ' + level;
+  const t = new Date().toLocaleTimeString('en-US', { hour12: false });
+  el.innerHTML = '<span class="time">' + t + '</span>' + esc(text);
+  terminal.appendChild(el);
+  if (autoScroll) terminal.scrollTop = terminal.scrollHeight;
+  while (terminal.children.length > 2000) terminal.removeChild(terminal.firstChild);
+}
+function logHtml(html, level) {
+  const el = document.createElement('div');
+  el.className = 'log-entry ' + level;
+  const t = new Date().toLocaleTimeString('en-US', { hour12: false });
+  el.innerHTML = '<span class="time">' + t + '</span>' + html;
+  terminal.appendChild(el);
+  if (autoScroll) terminal.scrollTop = terminal.scrollHeight;
+  while (terminal.children.length > 2000) terminal.removeChild(terminal.firstChild);
+}
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// ── SSE ────────────────────────────────────
+let _eventSource = null;
+function connectSSE() {
+  if (_eventSource) { try { _eventSource.close(); } catch {} }
+  const es = new EventSource('/api/events');
+  _eventSource = es;
+  es.onopen = () => { document.getElementById('sse-status').textContent = 'ok'; document.getElementById('sse-status').style.color = 'var(--success)'; };
+  es.onerror = () => { document.getElementById('sse-status').textContent = 'err'; document.getElementById('sse-status').style.color = 'var(--error)'; };
+
+  es.addEventListener('state', e => updateState(JSON.parse(e.data)));
+  es.addEventListener('config', e => { config = JSON.parse(e.data); renderAll(); });
+  es.addEventListener('status', e => updateButtons(JSON.parse(e.data).status));
+  es.addEventListener('agent_log', e => { const d = JSON.parse(e.data); log(d.message, d.level || 'info'); });
+  es.addEventListener('agent_text', e => { JSON.parse(e.data).text.split('\n').forEach(l => { if(l.trim()) log(l, 'text'); }); });
+  es.addEventListener('beat_start', e => { const d = JSON.parse(e.data); log('Heartbeat #' + d.beat + ' | ' + d.phase, 'beat'); document.getElementById('hb-count').textContent = d.beat; });
+  es.addEventListener('beat_end', e => { log('Beat #' + JSON.parse(e.data).beat + ' complete', 'info'); refreshPortfolio(); });
+  es.addEventListener('tool_call', e => {
+    const d = JSON.parse(e.data);
+    const args = Object.keys(d.args||{}).length ? ' ' + JSON.stringify(d.args).substring(0,120) : '';
+    logHtml('<span class="tool-name">' + esc(d.name) + '</span><span class="tool-args">' + esc(args) + '</span>', 'tool');
+  });
+  es.addEventListener('tool_result', e => {
+    const d = JSON.parse(e.data);
+    logHtml('<span style="color:var(--ink-faint)">  -> ' + esc(d.name) + ': ' + esc(d.result.substring(0,200)) + '</span>', 'info');
+  });
+  es.addEventListener('heartbeat_change', e => { const d = JSON.parse(e.data); log('Heartbeat -> ' + d.seconds + 's: ' + d.reason, 'heartbeat'); document.getElementById('hb-interval').textContent = fmtInt(d.seconds); });
+  es.addEventListener('schedule', e => {
+    const d = JSON.parse(e.data);
+    nextBeatTime = new Date(d.nextBeat); heartbeatSeconds = d.seconds;
+    document.getElementById('hb-interval').textContent = fmtInt(d.seconds);
+    updatePhase(d.phase); startProgress();
+  });
+  es.addEventListener('trade', e => { addTradeCard(JSON.parse(e.data)); });
+}
+
+function updateState(s) {
+  document.getElementById('hb-count').textContent = s.beatCount;
+  document.getElementById('stat-beats').textContent = s.stats.totalBeats;
+  document.getElementById('stat-tools').textContent = s.stats.toolCalls;
+  document.getElementById('stat-trades').textContent = s.stats.trades;
+  document.getElementById('stat-errors').textContent = s.stats.errors;
+  document.getElementById('hb-interval').textContent = fmtInt(s.heartbeatSeconds);
+  document.getElementById('footer-model').textContent = (s.activeModel || '--').replace('claude-', '').split('-202')[0];
+  updatePhase(s.phase);
+  updateButtons(s.running ? (s.paused ? 'paused' : 'started') : 'stopped');
+  if (s.recentTrades) s.recentTrades.forEach(t => addTradeCard(t));
+}
+
+function updateButtons(status) {
+  const els = { start: 'btn-start', pause: 'btn-pause', resume: 'btn-resume', stop: 'btn-stop' };
+  Object.values(els).forEach(id => document.getElementById(id).style.display = 'none');
+  const dot = document.getElementById('status-dot');
+  const text = document.getElementById('status-text');
+  dot.className = 'status-dot';
+  switch(status) {
+    case 'started': case 'resumed':
+      document.getElementById('btn-pause').style.display = '';
+      document.getElementById('btn-stop').style.display = '';
+      dot.classList.add('running'); text.textContent = 'Running'; break;
+    case 'paused':
+      document.getElementById('btn-resume').style.display = '';
+      document.getElementById('btn-stop').style.display = '';
+      dot.classList.add('paused'); text.textContent = 'Paused'; break;
+    default:
+      document.getElementById('btn-start').style.display = '';
+      text.textContent = 'Stopped';
+  }
+}
+
+function updatePhase(phase) {
+  const b = document.getElementById('phase-badge');
+  const labels = { pre_market:'Pre-Market', market_open:'Market Open', midday:'Midday', market_close:'Market Close', after_hours:'After Hours', closed:'Closed' };
+  b.textContent = labels[phase] || phase;
+  b.className = 'phase-badge';
+  if(phase==='market_open'||phase==='midday') b.classList.add('open');
+  else if(phase==='pre_market') b.classList.add('pre');
+  else if(phase==='market_close'||phase==='after_hours') b.classList.add('close');
+}
+
+function fmtInt(s) { return s>=3600? (s/3600).toFixed(1)+'h' : s>=60? Math.floor(s/60)+'m '+s%60+'s' : s+'s'; }
+
+function startProgress() {
+  if(progressInterval) clearInterval(progressInterval);
+  progressInterval = setInterval(() => {
+    if(!nextBeatTime||!heartbeatSeconds) return;
+    const rem = nextBeatTime.getTime() - Date.now();
+    const pct = Math.max(0, Math.min(100, ((heartbeatSeconds*1000 - rem)/(heartbeatSeconds*1000))*100));
+    document.getElementById('hb-fill').style.width = pct + '%';
+    document.getElementById('hb-next').textContent = Math.max(0, Math.ceil(rem/1000)) + 's';
+  }, 1000);
+}
+
+// ── API calls ──────────────────────────────
+async function startAgent() {
+  const btn = document.getElementById('btn-start');
+  btn.textContent = 'Starting...'; btn.disabled = true;
+  try {
+    const r = await fetch('/api/agent/start', {method:'POST'});
+    const d = await r.json();
+    if (!d.ok && d.error) log('Start failed: ' + d.error, 'error');
+  } catch (e) { log('Start error: ' + e.message, 'error'); }
+  btn.textContent = 'Start'; btn.disabled = false;
+}
+async function stopAgent() {
+  if (!confirm('Stop the agent? Any in-progress beat will be terminated.')) return;
+  await fetch('/api/agent/stop', {method:'POST'});
+}
+async function pauseAgent() { await fetch('/api/agent/pause', {method:'POST'}); }
+async function resumeAgent() { await fetch('/api/agent/resume', {method:'POST'}); }
+async function overrideHeartbeat() {
+  const v = parseInt(document.getElementById('hb-override').value);
+  if(!v||v<30||v>3600) return;
+  await fetch('/api/agent/heartbeat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({seconds:v})});
+  document.getElementById('hb-override').value = '';
+}
+
+// ── Portfolio ──────────────────────────────
+async function refreshPortfolio() {
+  try {
+    const [a, p] = await Promise.all([fetch('/api/portfolio/account'), fetch('/api/portfolio/positions')]);
+    if(a.ok) {
+      const acc = await a.json();
+      const pv = '$' + Number(acc.PortfolioValue||acc.portfolio_value||0).toLocaleString('en-US',{minimumFractionDigits:2});
+      const cv = '$' + Number(acc.Cash||acc.cash||0).toLocaleString('en-US',{minimumFractionDigits:2});
+      const bv = '$' + Number(acc.BuyingPower||acc.buying_power||0).toLocaleString('en-US',{minimumFractionDigits:2});
+      const pnl = Number(acc.Equity||acc.equity||0) - Number(acc.LastEquity||acc.last_equity||0);
+      const pnlStr = (pnl>=0?'+':'') + '$' + pnl.toLocaleString('en-US',{minimumFractionDigits:2});
+      const cls = pnl>=0? 'positive' : 'negative';
+      ['portfolio-value','m-portfolio'].forEach(id => { const e = document.getElementById(id); if(e) e.textContent = pv; });
+      ['cash-value','m-cash'].forEach(id => { const e = document.getElementById(id); if(e) e.textContent = cv; });
+      ['bp-value','m-bp'].forEach(id => { const e = document.getElementById(id); if(e) e.textContent = bv; });
+      ['day-pnl','m-pnl'].forEach(id => { const e = document.getElementById(id); if(e) { e.textContent = pnlStr; e.className = 'stat-value ' + cls; } });
+    }
+    if(p.ok) {
+      const positions = await p.json();
+      const arr = positions.positions || positions || [];
+      const html = arr.length ? arr.map(pos => {
+        const sym = pos.Symbol||pos.symbol||'??', pnl = Number(pos.UnrealizedPL||pos.unrealized_pl||0);
+        const pct = (Number(pos.UnrealizedPLPercent||pos.unrealized_plpc||0)*100).toFixed(1);
+        const c = pnl>=0? 'var(--success)' : 'var(--error)';
+        return '<div class="card"><div style="display:flex;justify-content:space-between"><span class="symbol">'+sym+'</span><span class="pnl" style="color:'+c+'">'+(pnl>=0?'+':'')+'$'+pnl.toFixed(2)+' ('+pct+'%)</span></div><div style="color:var(--ink-faint);font-size:11px;margin-top:3px">Qty: '+(pos.Qty||pos.qty)+' | Avg: $'+Number(pos.AvgEntryPrice||pos.avg_entry_price||0).toFixed(2)+'</div></div>';
+      }).join('') : '<div class="no-data">No open positions</div>';
+      ['positions-container','m-positions'].forEach(id => { const e = document.getElementById(id); if(e) e.innerHTML = html; });
+    }
+  } catch {}
+}
+
+// ── Trade feed ─────────────────────────────
+function addTradeCard(trade) {
+  const feed = document.getElementById('trades-feed');
+  if(feed.querySelector('.no-data')) feed.innerHTML = '';
+  const card = document.createElement('div');
+  card.className = 'trade-card';
+  const t = trade.timestamp ? new Date(trade.timestamp).toLocaleTimeString('en-US',{hour12:false}) : '--';
+  card.innerHTML = '<div class="trade-header"><span class="trade-symbol">' + esc(trade.symbol||'??') + '</span><span class="trade-side ' + (trade.side||'') + '">' + esc(trade.side||'--') + '</span></div><div class="trade-details">' + esc(trade.tool||'') + (trade.quantity?' | Qty: '+trade.quantity:'') + (trade.price?' | $'+trade.price:'') + '</div><div class="trade-time">' + t + '</div>';
+  feed.insertBefore(card, feed.firstChild);
+  while(feed.children.length > 50) feed.removeChild(feed.lastChild);
+}
+
+// ── Render config panels ───────────────────
+function renderAll() {
+  renderAgents(); renderStrategies(); renderAccounts(); renderModels();
+  renderHeartbeat(); renderPermissions(); renderSlack(); renderPromptPreview();
+  document.getElementById('footer-model').textContent = (config.activeModel||'--').replace('claude-','').split('-202')[0];
+}
+
+function renderAgents() {
+  const el = document.getElementById('agents-list');
+  if(!config.agents?.length) { el.innerHTML = '<div class="no-data">No agents configured</div>'; return; }
+  el.innerHTML = config.agents.map(a => {
+    const active = a.id === config.activeAgentId;
+    return '<div class="config-card' + (active?' active-card':'') + '"><div class="config-card-header"><span class="config-card-title">' + esc(a.name) + '</span>' + (active?'<span class="badge active">Active</span>':'') + '</div><div class="config-card-desc">' + esc(a.description||'') + '</div><div class="config-card-meta">Model: ' + (a.model||'default') + ' | Strategy: ' + (a.strategyId||'none') + ' | Prompt: ' + a.systemPromptTemplate + '</div><div class="config-card-actions">' + (!active?'<button class="btn sm" onclick="activateAgent(\''+a.id+'\')">Activate</button>':'') + '<button class="btn sm" onclick="editAgent(\''+a.id+'\')">Edit</button>' + (a.id!=='default'?'<button class="btn sm danger" onclick="deleteAgent(\''+a.id+'\')">Delete</button>':'') + '</div></div>';
+  }).join('');
+}
+
+function renderStrategies() {
+  const el = document.getElementById('strategies-list');
+  if(!config.strategies?.length) { el.innerHTML = '<div class="no-data">No strategies</div>'; return; }
+  el.innerHTML = config.strategies.map(s => '<div class="config-card"><div class="config-card-header"><span class="config-card-title">' + esc(s.name) + '</span></div><div class="config-card-desc">' + esc(s.description||'') + '</div><div class="config-card-meta">' + (s.rulesFile? 'File: '+s.rulesFile : 'Custom rules: ' + (s.customRules||'').substring(0,80) + '...') + '</div><div class="config-card-actions"><button class="btn sm" onclick="editStrategy(\''+s.id+'\')">Edit</button>' + (s.id!=='default'?'<button class="btn sm danger" onclick="deleteStrategy(\''+s.id+'\')">Delete</button>':'') + '</div></div>').join('');
+}
+
+function renderAccounts() {
+  const el = document.getElementById('accounts-list');
+  if(!config.accounts?.length) { el.innerHTML = '<div class="no-data">No accounts. Add an Alpaca API key pair to get started.</div>'; return; }
+  el.innerHTML = config.accounts.map(a => {
+    const active = a.id === config.activeAccountId;
+    const badge = a.paper ? '<span class="badge paper">Paper</span>' : '<span class="badge live">Live</span>';
+    return '<div class="config-card' + (active?' active-card':'') + '"><div class="config-card-header"><span class="config-card-title">' + esc(a.name) + '</span><div>' + badge + ' ' + (active?'<span class="badge active">Active</span>':'') + '</div></div><div class="config-card-meta">Key: ' + (a.publicKey?a.publicKey.substring(0,8)+'...':'??') + ' | ' + (a.baseUrl||'') + '</div><div class="config-card-actions">' + (!active?'<button class="btn sm" onclick="activateAccount(\''+a.id+'\')">Activate</button>':'') + '<button class="btn sm danger" onclick="deleteAccount(\''+a.id+'\')">Delete</button></div></div>';
+  }).join('');
+}
+
+function renderModels() {
+  const el = document.getElementById('models-list');
+  el.innerHTML = (config.models||[]).map(m => {
+    const active = m.id === config.activeModel;
+    return '<div class="config-card' + (active?' active-card':'') + '" style="cursor:pointer" onclick="activateModel(\'' + m.id + '\')"><div class="config-card-header"><span class="config-card-title">' + esc(m.name) + '</span>' + (active?'<span class="badge active">Active</span>':'') + '</div><div class="config-card-desc">' + esc(m.description||'') + '</div><div class="config-card-meta">' + m.id + '</div></div>';
+  }).join('');
+}
+
+// ── CRUD actions ───────────────────────────
+async function activateAgent(id) { await fetch('/api/agents/'+id+'/activate',{method:'POST'}); }
+async function deleteAgent(id) { if(confirm('Delete this agent?')) await fetch('/api/agents/'+id,{method:'DELETE'}); }
+async function activateAccount(id) { await fetch('/api/accounts/'+id+'/activate',{method:'POST'}); }
+async function deleteAccount(id) { if(confirm('Delete this account?')) await fetch('/api/accounts/'+id,{method:'DELETE'}); }
+async function deleteStrategy(id) { if(confirm('Delete this strategy?')) await fetch('/api/strategies/'+id,{method:'DELETE'}); }
+async function activateModel(id) { await fetch('/api/models/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:id})}); }
+
+// ── Modal ──────────────────────────────────
+function showModal(type, data) {
+  const modal = document.getElementById('modal-content');
+  const overlay = document.getElementById('modal-overlay');
+
+  if(type === 'account-create') {
+    modal.innerHTML = '<h3>Add Trading Account</h3><div class="form-group"><label>Account Name</label><input type="text" id="f-acc-name" placeholder="e.g. Paper Trading"></div><div class="form-row"><div class="form-group"><label>Public Key</label><input type="text" id="f-acc-pk" placeholder="AKXXXXXXXXXX"></div><div class="form-group"><label>Secret Key</label><input type="password" id="f-acc-sk" placeholder="Your secret key"></div></div><div class="form-group"><label>Base URL</label><input type="text" id="f-acc-url" placeholder="https://paper-api.alpaca.markets"><div class="form-hint">Leave blank for auto-detection based on paper/live selection</div></div><div class="form-group"><label><input type="checkbox" id="f-acc-paper" checked> Paper Trading</label></div><div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="submitAccount()">Add Account</button></div>';
+  }
+  else if(type === 'agent-create' || type === 'agent-edit') {
+    const a = data || { name:'', description:'', systemPromptTemplate:'default', customSystemPrompt:'', strategyId:'default', model: config.activeModel, heartbeatOverrides:{} };
+    const stratOpts = (config.strategies||[]).map(s => '<option value="'+s.id+'"'+(s.id===a.strategyId?' selected':'')+'>'+esc(s.name)+'</option>').join('');
+    const modelOpts = (config.models||[]).map(m => '<option value="'+m.id+'"'+(m.id===a.model?' selected':'')+'>'+esc(m.name)+'</option>').join('');
+    modal.innerHTML = '<h3>' + (data?'Edit':'Create') + ' Agent</h3><div class="form-group"><label>Name</label><input type="text" id="f-ag-name" value="'+esc(a.name)+'"></div><div class="form-group"><label>Description</label><input type="text" id="f-ag-desc" value="'+esc(a.description)+'"></div><div class="form-row"><div class="form-group"><label>Strategy</label><select id="f-ag-strat"><option value="">None</option>'+stratOpts+'</select></div><div class="form-group"><label>Model</label><select id="f-ag-model">'+modelOpts+'</select></div></div><div class="form-group"><label>Prompt Type</label><select id="f-ag-ptype" onchange="document.getElementById(\'f-ag-prompt-wrap\').style.display=this.value===\'custom\'?\'block\':\'none\'"><option value="default"'+(a.systemPromptTemplate==='default'?' selected':'')+'>Default Template</option><option value="custom"'+(a.systemPromptTemplate==='custom'?' selected':'')+'>Custom Prompt</option></select></div><div id="f-ag-prompt-wrap" style="display:'+(a.systemPromptTemplate==='custom'?'block':'none')+'"><div class="form-group"><label>Custom System Prompt</label><textarea id="f-ag-prompt" rows="12" placeholder="You are an autonomous AI trading agent...">'+(a.customSystemPrompt||'')+'</textarea><div class="form-hint">Full system prompt sent to Claude. Heartbeat instructions are appended automatically.</div></div></div><div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="submitAgent(\''+(data?.id||'')+'\')">' + (data?'Save':'Create') + '</button></div>';
+  }
+  else if(type === 'strategy-create' || type === 'strategy-edit') {
+    const s = data || { name:'', description:'', customRules:'' };
+    modal.innerHTML = '<h3>' + (data?'Edit':'Create') + ' Strategy</h3><div class="form-group"><label>Name</label><input type="text" id="f-st-name" value="'+esc(s.name)+'"></div><div class="form-group"><label>Description</label><input type="text" id="f-st-desc" value="'+esc(s.description)+'"></div><div class="form-group"><label>Trading Rules</label><textarea id="f-st-rules" rows="16" placeholder="## Position Sizing\n- Max 15% per position\n...">'+(s.customRules||'')+'</textarea><div class="form-hint">Markdown format. These rules are injected into the agent\'s system prompt.</div></div><div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="submitStrategy(\''+(data?.id||'')+'\')">' + (data?'Save':'Create') + '</button></div>';
+  }
+  overlay.classList.add('visible');
+}
+
+function closeModal() { document.getElementById('modal-overlay').classList.remove('visible'); }
+
+async function submitAccount() {
+  const body = { name: v('f-acc-name'), publicKey: v('f-acc-pk'), secretKey: v('f-acc-sk'), baseUrl: v('f-acc-url'), paper: document.getElementById('f-acc-paper').checked };
+  try {
+    const r = await fetch('/api/accounts', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if (d.error) { alert('Error: ' + d.error); return; }
+    closeModal();
+  } catch (e) { alert('Error: ' + e.message); }
+}
+
+async function submitAgent(id) {
+  const body = { name: v('f-ag-name'), description: v('f-ag-desc'), strategyId: v('f-ag-strat')||null, model: v('f-ag-model'), systemPromptTemplate: v('f-ag-ptype'), customSystemPrompt: v('f-ag-prompt')||'' };
+  try {
+    const r = id
+      ? await fetch('/api/agents/'+id, {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+      : await fetch('/api/agents', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if (d.error) { alert('Error: ' + d.error); return; }
+    closeModal();
+  } catch (e) { alert('Error: ' + e.message); }
+}
+
+async function submitStrategy(id) {
+  const body = { name: v('f-st-name'), description: v('f-st-desc'), customRules: v('f-st-rules') };
+  try {
+    const r = id
+      ? await fetch('/api/strategies/'+id, {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+      : await fetch('/api/strategies', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if (d.error) { alert('Error: ' + d.error); return; }
+    closeModal();
+  } catch (e) { alert('Error: ' + e.message); }
+}
+
+function editAgent(id) { const a = config.agents.find(x => x.id === id); if(a) showModal('agent-edit', a); }
+function editStrategy(id) { const s = config.strategies.find(x => x.id === id); if(s) showModal('strategy-edit', s); }
+function v(id) { const e = document.getElementById(id); return e ? (e.type==='checkbox'?e.checked:e.value) : ''; }
+
+// ── Clock ──────────────────────────────────
+function updateClock() {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('en-US', { timeZone:'America/New_York', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:true }) + ' ET';
+}
+
+// ── Health ─────────────────────────────────
+async function checkHealth() {
+  try {
+    const r = await fetch('/api/health');
+    const d = await r.json();
+    const el = document.getElementById('bot-status');
+    el.textContent = d.trading_bot === 'healthy' ? 'ok' : 'off';
+    el.style.color = d.trading_bot === 'healthy' ? 'var(--success)' : 'var(--error)';
+  } catch { document.getElementById('bot-status').textContent = 'err'; }
+}
+
+// ── Auth ───────────────────────────────────
+async function checkAuth() {
+  try {
+    const r = await fetch('/api/auth/status');
+    const d = await r.json();
+    const badge = document.getElementById('auth-badge');
+    const desc = document.getElementById('auth-desc');
+    const loginBtn = document.getElementById('auth-login-btn');
+    const logoutBtn = document.getElementById('auth-logout-btn');
+    if (d.loggedIn) {
+      badge.textContent = 'Authenticated';
+      badge.style.borderColor = 'var(--success)';
+      badge.style.color = 'var(--success)';
+      badge.style.background = 'var(--success-bg)';
+      desc.textContent = 'Claude CLI is authenticated' + (d.authMethod ? ' via ' + d.authMethod : '') + '. Ready to trade.';
+      loginBtn.style.display = 'none';
+      logoutBtn.style.display = '';
+      document.getElementById('auth-url-container').style.display = 'none';
+    } else {
+      badge.textContent = 'Not Logged In';
+      badge.style.borderColor = 'var(--error)';
+      badge.style.color = 'var(--error)';
+      badge.style.background = 'var(--error-bg)';
+      desc.textContent = 'Claude CLI needs authentication. Click Login to authenticate via browser.';
+      loginBtn.style.display = '';
+      logoutBtn.style.display = 'none';
+    }
+  } catch {
+    document.getElementById('auth-desc').textContent = 'Could not check auth status';
+  }
+}
+
+async function triggerLogin() {
+  const btn = document.getElementById('auth-login-btn');
+  btn.textContent = 'Starting login...';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/auth/login', { method: 'POST' });
+    const d = await r.json();
+    if (d.url) {
+      const container = document.getElementById('auth-url-container');
+      const link = document.getElementById('auth-url-link');
+      link.href = d.url;
+      link.textContent = d.url;
+      container.style.display = 'block';
+      // Try to open in new tab
+      window.open(d.url, '_blank');
+      btn.textContent = 'Waiting for auth...';
+      // Poll for auth completion
+      const poll = setInterval(async () => {
+        try {
+          const s = await fetch('/api/auth/status');
+          const sd = await s.json();
+          if (sd.loggedIn) {
+            clearInterval(poll);
+            checkAuth();
+            log('Claude CLI authenticated successfully!', 'success');
+          }
+        } catch {}
+      }, 3000);
+      // Stop polling after 5 min
+      setTimeout(() => clearInterval(poll), 300000);
+    } else {
+      btn.textContent = 'Login Failed';
+      log('Auth error: ' + (d.error || 'unknown'), 'error');
+    }
+  } catch (e) {
+    btn.textContent = 'Login Failed';
+    log('Auth error: ' + e.message, 'error');
+  }
+  setTimeout(() => { btn.textContent = 'Login with Browser'; btn.disabled = false; }, 5000);
+}
+
+async function triggerLogout() {
+  const btn = document.getElementById('auth-logout-btn');
+  btn.textContent = 'Logging out...';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/auth/logout', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      log('Claude CLI logged out.', 'info');
+      checkAuth();
+    } else {
+      log('Logout error: ' + (d.error || 'unknown'), 'error');
+    }
+  } catch (e) {
+    log('Logout error: ' + e.message, 'error');
+  }
+  btn.textContent = 'Logout';
+  btn.disabled = false;
+}
+
+// ── Chat / User Messages ───────────────────
+async function sendMessage() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  log(text, 'user');
+  try {
+    const r = await fetch('/api/agent/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text }),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      log('Failed to send: ' + (d.error || 'unknown'), 'error');
+    } else if (d.interrupted) {
+      log('Interrupted current beat — sending your message now...', 'warning');
+    }
+  } catch (e) {
+    log('Send error: ' + e.message, 'error');
+  }
+}
+
+// ── Heartbeat Config ───────────────────────
+function renderHeartbeat() {
+  const hb = config.heartbeat || {};
+  const phases = ['pre_market','market_open','midday','market_close','after_hours','closed'];
+  phases.forEach(p => {
+    const el = document.getElementById('hb-' + p);
+    if (el && hb[p] !== undefined) el.value = hb[p];
+  });
+}
+
+let _hbTimer = null;
+function saveHeartbeat() {
+  clearTimeout(_hbTimer);
+  _hbTimer = setTimeout(async () => {
+    const body = {};
+    ['pre_market','market_open','midday','market_close','after_hours','closed'].forEach(p => {
+      const v = parseInt(document.getElementById('hb-' + p)?.value);
+      if (v && v >= 30) body[p] = v;
+    });
+    await fetch('/api/heartbeat', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  }, 600);
+}
+
+// ── Permissions Config ─────────────────────
+function renderPermissions() {
+  const p = config.permissions || {};
+  document.getElementById('perm-live').checked = p.allowLiveTrading !== false;
+  document.getElementById('perm-options').checked = p.allowOptions !== false;
+  document.getElementById('perm-stocks').checked = p.allowStocks !== false;
+  document.getElementById('perm-0dte').checked = !!p.allow0DTE;
+  document.getElementById('perm-confirm').checked = !!p.requireConfirmation;
+  document.getElementById('perm-maxpos').value = p.maxPositionPct || 15;
+  document.getElementById('perm-maxdeploy').value = p.maxDeployedPct || 80;
+  document.getElementById('perm-maxloss').value = p.maxDailyLoss || 5;
+  document.getElementById('perm-maxopen').value = p.maxOpenPositions || 10;
+  document.getElementById('perm-maxorder').value = p.maxOrderValue || 0;
+  document.getElementById('perm-maxtools').value = p.maxToolRoundsPerBeat || 25;
+  document.getElementById('perm-blocked').value = (p.blockedTools || []).join(', ');
+}
+
+let _permTimer = null;
+function savePermissions() {
+  clearTimeout(_permTimer);
+  _permTimer = setTimeout(async () => {
+    const blocked = document.getElementById('perm-blocked').value.split(',').map(s => s.trim()).filter(Boolean);
+    const body = {
+      allowLiveTrading: document.getElementById('perm-live').checked,
+      allowOptions: document.getElementById('perm-options').checked,
+      allowStocks: document.getElementById('perm-stocks').checked,
+      allow0DTE: document.getElementById('perm-0dte').checked,
+      requireConfirmation: document.getElementById('perm-confirm').checked,
+      maxPositionPct: parseInt(document.getElementById('perm-maxpos').value) || 15,
+      maxDeployedPct: parseInt(document.getElementById('perm-maxdeploy').value) || 80,
+      maxDailyLoss: parseInt(document.getElementById('perm-maxloss').value) || 5,
+      maxOpenPositions: parseInt(document.getElementById('perm-maxopen').value) || 10,
+      maxOrderValue: parseInt(document.getElementById('perm-maxorder').value) || 0,
+      maxToolRoundsPerBeat: parseInt(document.getElementById('perm-maxtools').value) || 25,
+      blockedTools: blocked,
+    };
+    await fetch('/api/permissions', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  }, 600);
+}
+
+// ── Slack Plugin Config ────────────────────
+function renderSlack() {
+  const s = config.plugins?.slack || {};
+  document.getElementById('slack-enabled').checked = !!s.enabled;
+  document.getElementById('slack-webhook').value = s.webhookUrl || '';
+  document.getElementById('slack-channel').value = s.channel || '';
+  const n = s.notifyOn || {};
+  document.getElementById('slack-n-trade').checked = n.tradeExecuted !== false;
+  document.getElementById('slack-n-startstop').checked = n.agentStartStop !== false;
+  document.getElementById('slack-n-errors').checked = n.errors !== false;
+  document.getElementById('slack-n-daily').checked = n.dailySummary !== false;
+  document.getElementById('slack-n-open').checked = n.positionOpened !== false;
+  document.getElementById('slack-n-close').checked = n.positionClosed !== false;
+  document.getElementById('slack-n-hb').checked = !!n.heartbeat;
+  const badge = document.getElementById('slack-badge');
+  if (s.enabled && s.webhookUrl) {
+    badge.textContent = 'Active'; badge.style.borderColor = 'var(--success)'; badge.style.color = 'var(--success)'; badge.style.background = 'var(--success-bg)';
+  } else {
+    badge.textContent = 'Disabled'; badge.style.borderColor = 'var(--ink-faint)'; badge.style.color = 'var(--ink-faint)'; badge.style.background = 'transparent';
+  }
+}
+
+let _slackTimer = null;
+function saveSlackConfig() {
+  clearTimeout(_slackTimer);
+  _slackTimer = setTimeout(async () => {
+    const body = {
+      enabled: document.getElementById('slack-enabled').checked,
+      webhookUrl: document.getElementById('slack-webhook').value.trim(),
+      channel: document.getElementById('slack-channel').value.trim(),
+      notifyOn: {
+        tradeExecuted: document.getElementById('slack-n-trade').checked,
+        agentStartStop: document.getElementById('slack-n-startstop').checked,
+        errors: document.getElementById('slack-n-errors').checked,
+        dailySummary: document.getElementById('slack-n-daily').checked,
+        positionOpened: document.getElementById('slack-n-open').checked,
+        positionClosed: document.getElementById('slack-n-close').checked,
+        heartbeat: document.getElementById('slack-n-hb').checked,
+      },
+    };
+    await fetch('/api/plugins/slack', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  }, 600);
+}
+
+async function testSlack() {
+  const el = document.getElementById('slack-test-result');
+  el.textContent = 'Sending...'; el.style.color = 'var(--ink-muted)';
+  try {
+    const r = await fetch('/api/plugins/slack/test', { method:'POST' });
+    const d = await r.json();
+    if (d.ok) { el.textContent = 'Sent!'; el.style.color = 'var(--success)'; }
+    else { el.textContent = d.error || 'Failed'; el.style.color = 'var(--error)'; }
+  } catch (e) { el.textContent = 'Error: ' + e.message; el.style.color = 'var(--error)'; }
+  setTimeout(() => { el.textContent = ''; }, 5000);
+}
+
+async function renderPromptPreview() {
+  const el = document.getElementById('prompt-preview');
+  try {
+    const r = await fetch('/api/agent/prompt-preview');
+    const d = await r.json();
+    if (d.prompt) {
+      el.textContent = d.prompt;
+    } else {
+      el.textContent = 'No prompt available.';
+    }
+  } catch {
+    el.textContent = 'Failed to load prompt preview.';
+  }
+}
+
+// ── Terminal Search/Filter ──────────────────
+let _searchDebounce = null;
+function filterTerminal() {
+  clearTimeout(_searchDebounce);
+  _searchDebounce = setTimeout(_applyTerminalFilter, 150);
+}
+function _applyTerminalFilter() {
+  const query = (document.getElementById('terminal-search').value || '').toLowerCase().trim();
+  const level = document.getElementById('terminal-level-filter').value;
+  const entries = terminal.querySelectorAll('.log-entry');
+  let visible = 0, total = entries.length;
+  entries.forEach(el => {
+    let show = true;
+    // Level filter
+    if (level !== 'all') {
+      show = el.classList.contains(level);
+    }
+    // Text search
+    if (show && query) {
+      show = el.textContent.toLowerCase().includes(query);
+    }
+    el.classList.toggle('search-hidden', !show);
+    el.classList.toggle('search-highlight', show && query.length > 0);
+    if (show) visible++;
+  });
+  const countEl = document.getElementById('search-count');
+  if (query || level !== 'all') {
+    countEl.textContent = visible + '/' + total;
+  } else {
+    countEl.textContent = '';
+  }
+}
+function clearTerminalSearch() {
+  document.getElementById('terminal-search').value = '';
+  document.getElementById('terminal-level-filter').value = 'all';
+  terminal.querySelectorAll('.log-entry').forEach(el => {
+    el.classList.remove('search-hidden', 'search-highlight');
+  });
+  document.getElementById('search-count').textContent = '';
+}
+
+// ── Init ───────────────────────────────────
+let _pollIntervals = [];
+function startPolling() {
+  stopPolling();
+  connectSSE();
+  _pollIntervals = [
+    setInterval(updateClock, 1000),
+    setInterval(refreshPortfolio, 30000),
+    setInterval(checkHealth, 15000),
+    setInterval(checkAuth, 30000),
+  ];
+  // Run immediately on start
+  updateClock(); refreshPortfolio(); checkHealth(); checkAuth();
+}
+function stopPolling() {
+  _pollIntervals.forEach(id => clearInterval(id));
+  _pollIntervals = [];
+  if (_eventSource) { try { _eventSource.close(); } catch {} _eventSource = null; }
+  document.getElementById('sse-status').textContent = 'paused';
+  document.getElementById('sse-status').style.color = 'var(--warning)';
+}
+
+// Pause polling when tab is hidden to save resources
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    stopPolling();
+  } else {
+    startPolling();
+  }
+});
+
+startPolling();
+</script>
+</body>
+</html>
