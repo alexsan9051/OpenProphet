@@ -18,7 +18,9 @@ echo ""
 
 # Load env
 if [ -f .env ]; then
-    export $(cat .env | grep -v '^#' | xargs)
+    set -a
+    source .env
+    set +a
 else
     echo -e "${RED}No .env file found. Copy .env.example and fill in your keys.${NC}"
     exit 1

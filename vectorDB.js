@@ -22,7 +22,7 @@ async function getEmbedder() {
 
 // Lazy-initialized SQLite database — deferred until first use so the MCP server
 // doesn't crash on import when data/ directory doesn't exist yet.
-const dbPath = path.join(__dirname, 'data', 'prophet_trader.db');
+const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'data', 'prophet_trader.db');
 let _db = null;
 
 function getDb() {

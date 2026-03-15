@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/joho/godotenv"
@@ -23,10 +22,8 @@ type Config struct {
 var AppConfig *Config
 
 func Load() error {
-	// Load .env file if it exists
-	if err := godotenv.Load(); err != nil {
-		return fmt.Errorf("error loading .env file: %v", err)
-	}
+	// Load .env file if it exists (don't override existing env vars)
+	_ = godotenv.Load()
 
 	AppConfig = &Config{
 		AlpacaAPIKey:      os.Getenv("ALPACA_API_KEY"),
@@ -35,7 +32,7 @@ func Load() error {
 		AlpacaPaper:       getEnvOrDefault("ALPACA_PAPER", "true") == "true",
 		GeminiAPIKey:      os.Getenv("GEMINI_API_KEY"),
 		DatabasePath:      getEnvOrDefault("DATABASE_PATH", "./data/prophet_trader.db"),
-		ServerPort:        getEnvOrDefault("SERVER_PORT", "4534"),
+		ServerPort:        getEnvOrDefault("PORT", getEnvOrDefault("SERVER_PORT", "4534")),
 		EnableLogging:     getEnvOrDefault("ENABLE_LOGGING", "true") == "true",
 		LogLevel:          getEnvOrDefault("LOG_LEVEL", "info"),
 		DataRetentionDays: 90,

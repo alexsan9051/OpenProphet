@@ -54,7 +54,7 @@ func main() {
 		cfg.AlpacaPaper,
 	)
 	if err != nil {
-		logger.Fatal("Failed to create trading service:", err)
+		logger.Warn("Failed to create trading service (will retry on requests):", err)
 	}
 
 	// Create data service
@@ -88,14 +88,18 @@ func main() {
 
 	// Test account connection
 	logger.Info("Testing Alpaca connection...")
-	if account, err := orderController.GetAccount(); err != nil {
-		logger.Fatal("Failed to connect to Alpaca:", err)
+	if tradingService != nil {
+		if account, err := orderController.GetAccount(); err != nil {
+			logger.Warn("Failed to connect to Alpaca (trading will be unavailable):", err)
+		} else {
+			logger.WithFields(logrus.Fields{
+				"cash":            account.Cash,
+				"buying_power":    account.BuyingPower,
+				"portfolio_value": account.PortfolioValue,
+			}).Info("Successfully connected to Alpaca")
+		}
 	} else {
-		logger.WithFields(logrus.Fields{
-			"cash":           account.Cash,
-			"buying_power":   account.BuyingPower,
-			"portfolio_value": account.PortfolioValue,
-		}).Info("Successfully connected to Alpaca")
+		logger.Warn("Trading service unavailable - API credentials may be invalid")
 	}
 
 	// Start background tasks
@@ -107,7 +111,11 @@ func main() {
 	positionController := controllers.NewPositionManagementController(positionManager)
 
 	// Create activity logger
-	activityLogger := services.NewActivityLogger("./activity_logs")
+	activityLogDir := os.Getenv("ACTIVITY_LOG_DIR")
+	if activityLogDir == "" {
+		activityLogDir = "./activity_logs"
+	}
+	activityLogger := services.NewActivityLogger(activityLogDir)
 	activityController := controllers.NewActivityController(activityLogger)
 
 	// Start trading session automatically

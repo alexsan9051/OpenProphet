@@ -15,8 +15,11 @@ import { storeTrade, findSimilarTrades, getTradeStats, getEmbeddingCount } from 
 // Configuration
 const TRADING_BOT_URL = process.env.TRADING_BOT_URL || 'http://localhost:4534';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const SUMMARIES_DIR = path.join(process.cwd(), 'news_summaries');
-const DECISIONS_DIR = path.join(process.cwd(), 'decisive_actions');
+const OPENPROPHET_ACCOUNT_ID = process.env.OPENPROPHET_ACCOUNT_ID || 'default';
+const OPENPROPHET_SANDBOX_ID = process.env.OPENPROPHET_SANDBOX_ID || `sbx_${OPENPROPHET_ACCOUNT_ID}`;
+const SANDBOX_DATA_DIR = path.join(process.cwd(), 'data', 'sandboxes', OPENPROPHET_ACCOUNT_ID);
+const SUMMARIES_DIR = path.join(SANDBOX_DATA_DIR, 'news_summaries');
+const DECISIONS_DIR = path.join(SANDBOX_DATA_DIR, 'decisive_actions');
 
 // Initialize Gemini
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
@@ -26,12 +29,33 @@ const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
 await fs.mkdir(SUMMARIES_DIR, { recursive: true });
 await fs.mkdir(DECISIONS_DIR, { recursive: true });
 
-// Helper to call trading bot API
+// Helper to call trading bot API - resolves correct port per sandbox
+async function getTradingBotUrl() {
+  try {
+    const resp = await agentAxios.get(`${AGENT_URL}/api/health`, { timeout: 3000 });
+    const sandboxes = resp.data.sandboxes || [];
+    const sandbox = sandboxes.find(s => s.sandboxId === OPENPROPHET_SANDBOX_ID);
+    if (sandbox && sandbox.port) {
+      return `http://localhost:${sandbox.port}`;
+    }
+  } catch {}
+  return TRADING_BOT_URL;
+}
+
+let _tradingBotUrl = TRADING_BOT_URL;
+let _lastPortCheck = 0;
+
 async function callTradingBot(endpoint, method = 'GET', data = null) {
   try {
+    // Refresh port every 30 seconds
+    const now = Date.now();
+    if (now - _lastPortCheck > 30000) {
+      _tradingBotUrl = await getTradingBotUrl();
+      _lastPortCheck = now;
+    }
     const config = {
       method,
-      url: `${TRADING_BOT_URL}/api/v1${endpoint}`,
+      url: `${_tradingBotUrl}/api/v1${endpoint}`,
       headers: { 'Content-Type': 'application/json' },
     };
     if (data) {
@@ -890,18 +914,126 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
       },
+      {
+        name: 'set_session_mode',
+        description: 'Set session mode: "continuous" keeps conversation context across heartbeats (default), "fresh" starts a new session each heartbeat (better for long_horizon mode). Use fresh for long horizon strategies where each beat should be independent.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            mode: { type: 'string', description: 'Session mode: "continuous" or "fresh"' },
+          },
+          required: ['mode'],
+        },
+      },
+      {
+        name: 'get_heartbeat_profiles',
+        description: 'List available heartbeat profiles/skills. These are predefined heartbeat configurations for different trading styles: active (high-frequency), passive (low-frequency), long_horizon (weekly/monthly check-ins), earnings_season (heightened vigilance), overnight (minimal overnight checks), scalp (rapid-fire).',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      {
+        name: 'apply_heartbeat_profile',
+        description: 'Apply a heartbeat profile to change your heartbeat intervals based on trading style. Use get_heartbeat_profiles to see available options.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            profile: { 
+              type: 'string', 
+              description: 'Profile key: active, passive, long_horizon, earnings_season, overnight, scalp',
+            },
+          },
+          required: ['profile'],
+        },
+      },
+      {
+        name: 'get_heartbeat_phases',
+        description: 'Get the current heartbeat phase time ranges (in minutes from midnight ET). This shows when each phase (pre_market, market_open, midday, market_close, after_hours, closed) is active.',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      {
+        name: 'update_heartbeat_phase',
+        description: 'Update the time range for a heartbeat phase. Use get_heartbeat_phases to see current ranges.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            phase: { 
+              type: 'string', 
+              description: 'Phase name: pre_market, market_open, midday, market_close, after_hours',
+            },
+            start: { 
+              type: 'number', 
+              description: 'Start minute from midnight ET (e.g., 240 = 4:00 AM ET)',
+            },
+            end: { 
+              type: 'number', 
+              description: 'End minute from midnight ET (e.g., 570 = 9:30 AM ET)',
+            },
+          },
+          required: ['phase'],
+        },
+      },
+      {
+        name: 'create_agent',
+        description: 'Create a new agent persona. The agent will appear in the UI and can be assigned to any sandbox/account. Returns the new agent ID.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Agent name (e.g., "BluechipTrader")' },
+            description: { type: 'string', description: 'Short description of the agent personality' },
+            model: { type: 'string', description: 'Model ID (e.g., "anthropic/claude-sonnet-4-6")' },
+            strategyId: { type: 'string', description: 'Strategy ID to use (optional, can assign later)' },
+            customSystemPrompt: { type: 'string', description: 'Custom system prompt for this agent' },
+          },
+          required: ['name'],
+        },
+      },
+      {
+        name: 'create_strategy',
+        description: 'Create a new trading strategy with rules. The strategy will appear in the UI and can be assigned to any agent. Returns the new strategy ID.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Strategy name (e.g., "BluechipSteady")' },
+            description: { type: 'string', description: 'Short description of the strategy' },
+            customRules: { type: 'string', description: 'The trading rules in markdown format' },
+          },
+          required: ['name', 'customRules'],
+        },
+      },
+      {
+        name: 'assign_agent_to_sandbox',
+        description: 'Assign an agent to a specific sandbox/account. Use after creating an agent to activate it on an account.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agentId: { type: 'string', description: 'Agent ID to assign' },
+            sandboxId: { type: 'string', description: 'Sandbox ID (e.g., "sbx_6edbf348"). If not provided, uses current sandbox.' },
+          },
+          required: ['agentId'],
+        },
+      },
     ],
   };
 });
 
 // ── Permission Enforcement ──────────────────────────────────────────
 const AGENT_URL = process.env.AGENT_URL || 'http://localhost:3737';
+const AGENT_AUTH_TOKEN = process.env.AGENT_AUTH_TOKEN || '';
+const AGENT_QUERY = { sandboxId: OPENPROPHET_SANDBOX_ID };
+const agentAxios = axios.create({
+  headers: AGENT_AUTH_TOKEN ? { Authorization: `Bearer ${AGENT_AUTH_TOKEN}` } : {},
+});
 const ORDER_TOOLS = ['place_buy_order', 'place_sell_order', 'place_options_order', 'place_managed_position', 'close_managed_position'];
 
 async function enforcePermissions(toolName, args) {
   let perms;
   try {
-    const resp = await axios.get(`${AGENT_URL}/api/permissions`, { timeout: 3000 });
+    const resp = await agentAxios.get(`${AGENT_URL}/api/permissions`, { timeout: 3000, params: AGENT_QUERY });
     perms = resp.data;
   } catch {
     // If agent server unreachable, allow (fail open for non-order tools, fail closed for orders)
@@ -1498,6 +1630,8 @@ ${allNews.map((article, i) =>
 
         const decision = {
           timestamp: new Date().toISOString(),
+          sandbox_id: OPENPROPHET_SANDBOX_ID,
+          account_id: OPENPROPHET_ACCOUNT_ID,
           action: args.action,
           symbol: args.symbol || null,
           reasoning: args.reasoning,
@@ -1824,44 +1958,50 @@ Worst Trade: ${stats.worst_result_pct.toFixed(1)}% ($${stats.worst_result_dollar
       // ── Agent Self-Modification Tools ──────────────────────────
       case 'update_agent_prompt': {
         const { prompt } = args;
-        // Get active agent first
-        const agentResp = await axios.get(`${AGENT_URL}/api/agents`);
-        const activeId = agentResp.data.activeId;
-        if (!activeId) throw new Error('No active agent');
-        // Update the agent's custom prompt
-        await axios.put(`${AGENT_URL}/api/agents/${activeId}`, {
+        await agentAxios.put(`${AGENT_URL}/api/sandboxes/${OPENPROPHET_SANDBOX_ID}/agent/overrides`, {
           systemPromptTemplate: 'custom',
           customSystemPrompt: prompt,
         });
         return {
-          content: [{ type: 'text', text: `Updated active agent prompt (${prompt.length} chars). Changes take effect on next heartbeat.` }],
+          content: [{ type: 'text', text: `Updated sandbox-local agent prompt (${prompt.length} chars). Changes take effect on next heartbeat.` }],
         };
       }
 
       case 'update_strategy_rules': {
-        const { rules, strategy_id } = args;
-        const sid = strategy_id || 'default';
-        await axios.put(`${AGENT_URL}/api/strategies/${sid}`, {
-          customRules: rules,
+        const { rules } = args;
+        await agentAxios.put(`${AGENT_URL}/api/sandboxes/${OPENPROPHET_SANDBOX_ID}/strategy-rules`, {
+          rules,
         });
         return {
-          content: [{ type: 'text', text: `Updated strategy "${sid}" rules (${rules.length} chars). Changes take effect on next heartbeat.` }],
+          content: [{ type: 'text', text: `Updated sandbox-local strategy rules (${rules.length} chars). Changes take effect on next heartbeat.` }],
         };
       }
 
       case 'get_agent_config': {
-        const [configResp, permResp, hbResp] = await Promise.all([
-          axios.get(`${AGENT_URL}/api/config`),
-          axios.get(`${AGENT_URL}/api/permissions`),
-          axios.get(`${AGENT_URL}/api/heartbeat`),
+        const [configResp, permResp, hbResp, sandboxResp] = await Promise.all([
+          agentAxios.get(`${AGENT_URL}/api/config`),
+          agentAxios.get(`${AGENT_URL}/api/permissions`, { params: AGENT_QUERY }),
+          agentAxios.get(`${AGENT_URL}/api/heartbeat`, { params: AGENT_QUERY }),
+          agentAxios.get(`${AGENT_URL}/api/sandboxes/${OPENPROPHET_SANDBOX_ID}/config`),
         ]);
         const config = configResp.data;
-        const activeAgent = config.agents?.find(a => a.id === config.activeAgentId);
+        const sandbox = sandboxResp.data.sandbox || config.sandboxes?.[OPENPROPHET_SANDBOX_ID] || null;
+        const activeAgent = sandboxResp.data.agent || null;
+        const activeModel = activeAgent?.model || sandbox?.agent?.model || config.activeModel;
         const result = {
-          activeAgent: activeAgent ? { id: activeAgent.id, name: activeAgent.name, model: activeAgent.model, promptType: activeAgent.systemPromptTemplate } : null,
-          activeModel: config.activeModel,
+          activeAgent: activeAgent ? {
+            id: activeAgent.id,
+            name: activeAgent.name,
+            model: activeAgent.model,
+            promptType: activeAgent.systemPromptTemplate,
+            strategyId: activeAgent.strategyId ?? null,
+            customStrategyRules: Boolean(activeAgent.customStrategyRules),
+          } : null,
+          activeModel,
           permissions: permResp.data,
           heartbeat: hbResp.data,
+          sandboxId: OPENPROPHET_SANDBOX_ID,
+          accountId: OPENPROPHET_ACCOUNT_ID,
           accountCount: config.accounts?.length || 0,
           strategyCount: config.strategies?.length || 0,
         };
@@ -1872,8 +2012,9 @@ Worst Trade: ${stats.worst_result_pct.toFixed(1)}% ($${stats.worst_result_dollar
 
       case 'set_heartbeat': {
         const seconds = Math.min(Math.max(args.seconds, 30), 3600);
-        await axios.post(`${AGENT_URL}/api/agent/heartbeat`, {
+        await agentAxios.post(`${AGENT_URL}/api/agent/heartbeat`, {
           seconds,
+          sandboxId: OPENPROPHET_SANDBOX_ID,
           reason: args.reason || `Agent override to ${seconds}s`,
         });
         return {
@@ -1882,9 +2023,111 @@ Worst Trade: ${stats.worst_result_pct.toFixed(1)}% ($${stats.worst_result_dollar
       }
 
       case 'update_permissions': {
-        await axios.put(`${AGENT_URL}/api/permissions`, args);
+        await agentAxios.put(`${AGENT_URL}/api/permissions`, {
+          ...args,
+          sandboxId: OPENPROPHET_SANDBOX_ID,
+        });
         return {
           content: [{ type: 'text', text: `Updated permissions: ${Object.keys(args).join(', ')}. Changes take effect immediately.` }],
+        };
+      }
+
+      case 'get_heartbeat_profiles': {
+        const resp = await agentAxios.get(`${AGENT_URL}/api/heartbeat/profiles`);
+        const profiles = resp.data.profiles || {};
+        let msg = 'Available heartbeat profiles:\n';
+        for (const [key, p] of Object.entries(profiles)) {
+          msg += `\n${key}: ${p.label}\n  ${p.description}\n  Phases: ${JSON.stringify(p.phases)}\n`;
+        }
+        return { content: [{ type: 'text', text: msg }] };
+      }
+
+      case 'apply_heartbeat_profile': {
+        const { profile } = args;
+        await agentAxios.post(`${AGENT_URL}/api/heartbeat/apply-profile`, {
+          profile,
+          sandboxId: OPENPROPHET_SANDBOX_ID,
+        });
+        return {
+          content: [{ type: 'text', text: `Applied heartbeat profile "${profile}". Changes take effect on next heartbeat.` }],
+        };
+      }
+
+      case 'get_heartbeat_phases': {
+        const resp = await agentAxios.get(`${AGENT_URL}/api/heartbeat/phases`);
+        const phases = resp.data.phases || {};
+        let msg = 'Heartbeat phase time ranges (minutes from midnight ET):\n';
+        for (const [key, p] of Object.entries(phases)) {
+          msg += `\n${key}: ${p.label}\n  ${p.start !== null ? `${p.start}-${p.end}` : 'N/A (closed)'}\n`;
+        }
+        return { content: [{ type: 'text', text: msg }] };
+      }
+
+      case 'update_heartbeat_phase': {
+        const { phase, start, end } = args;
+        await agentAxios.put(`${AGENT_URL}/api/heartbeat/phases`, {
+          phase,
+          start,
+          end,
+        });
+        return {
+          content: [{ type: 'text', text: `Updated phase "${phase}" time range. Changes take effect immediately.` }],
+        };
+      }
+
+      case 'set_session_mode': {
+        const { mode } = args;
+        if (mode !== 'continuous' && mode !== 'fresh') {
+          return { content: [{ type: 'text', text: 'Invalid mode. Use "continuous" or "fresh".' }], isError: true };
+        }
+        await agentAxios.put(`${AGENT_URL}/api/sandboxes/${OPENPROPHET_SANDBOX_ID}/agent/overrides`, {
+          sessionMode: mode,
+        });
+        const msg = mode === 'fresh' 
+          ? 'Session mode set to "fresh" - each heartbeat will start with a fresh context. Good for long_horizon strategies.'
+          : 'Session mode set to "continuous" - conversation context persists across heartbeats.';
+        return { content: [{ type: 'text', text: msg }] };
+      }
+
+      case 'create_agent': {
+        const { name: agentName, description, model, strategyId, customSystemPrompt } = args;
+        const body = {
+          name: agentName,
+          description: description || '',
+          model: model || 'anthropic/claude-sonnet-4-6',
+          strategyId: strategyId || undefined,
+          systemPromptTemplate: customSystemPrompt ? 'custom' : 'default',
+          customSystemPrompt: customSystemPrompt || '',
+        };
+        const resp = await agentAxios.post(`${AGENT_URL}/api/agents`, body);
+        const agent = resp.data.agent;
+        return {
+          content: [{ type: 'text', text: `Created agent "${agentName}" (ID: ${agent.id}). You can now assign it to a sandbox with assign_agent_to_sandbox.` }],
+        };
+      }
+
+      case 'create_strategy': {
+        const { name: stratName, description, customRules } = args;
+        const body = {
+          name: stratName,
+          description: description || '',
+          customRules: customRules,
+        };
+        const resp = await agentAxios.post(`${AGENT_URL}/api/strategies`, body);
+        const strategy = resp.data.strategy;
+        return {
+          content: [{ type: 'text', text: `Created strategy "${stratName}" (ID: ${strategy.id}). Assign it to an agent by updating the agent's strategyId, or use the UI.` }],
+        };
+      }
+
+      case 'assign_agent_to_sandbox': {
+        const { agentId, sandboxId } = args;
+        const targetSandbox = sandboxId || OPENPROPHET_SANDBOX_ID;
+        await agentAxios.put(`${AGENT_URL}/api/sandboxes/${targetSandbox}/agent`, {
+          activeAgentId: agentId,
+        });
+        return {
+          content: [{ type: 'text', text: `Assigned agent "${agentId}" to sandbox "${targetSandbox}". The agent will take over on the next heartbeat.` }],
         };
       }
 

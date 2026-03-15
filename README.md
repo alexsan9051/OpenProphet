@@ -2,6 +2,18 @@
 
 **Autonomous AI trading agent with a web dashboard, MCP tools, and a Go trading backend**
 
+---
+
+## **[Premium Setup Guide & Templates at openprophet.io](https://openprophet.io)**
+
+**Not comfortable with Git or self-hosting?** A paid service is available at **[openprophet.io](https://openprophet.io)** that handles the full setup for you. It also includes:
+
+- **Step-by-step setup guides** for every skill level
+- **Agent templates** -- pre-built personas with tuned prompts and configurations
+- **Strategy templates** -- ready-to-use trading strategies with rules and risk parameters
+
+---
+
 > **WARNING:** This is an experimental AI-powered trading system. Options trading involves significant risk of loss. Use paper trading only. The author assumes no responsibility for financial losses.
 
 <p align="center">
@@ -98,18 +110,6 @@ OpenProphet
     ├── agent-config.json          # Runtime config (accounts, agents, permissions)
     └── prophet_trader.db          # SQLite database
 ```
-
-### Stats
-
-| Metric | Value |
-|--------|-------|
-| Functions | 217 |
-| Types | 80 |
-| Lines of Code | 4,875 |
-| Avg Complexity | 4.01 |
-| API Endpoints | 75 (35 Go + 40 Agent) |
-| MCP Tools | 45+ |
-| Languages | Go, JavaScript, HTML |
 
 ---
 

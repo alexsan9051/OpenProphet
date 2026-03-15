@@ -4,7 +4,6 @@ import { spawn, execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import fs from 'fs/promises';
 import path from 'path';
-import { getConfig, getActiveAgent, getActiveAccount, getHeartbeatForPhase, getPermissions } from './config-store.js';
 
 // Default max tool rounds; overridden by permissions config at runtime
 
@@ -32,11 +31,13 @@ export function getCurrentPhase() {
 }
 
 // ── System Prompt Builder ──────────────────────────────────────────
-export async function buildSystemPrompt(agentConfig) {
+export async function buildSystemPrompt(agentConfig, options = {}) {
+  const { getStrategyById = () => null } = options;
   let strategyRules = '';
-  if (agentConfig.strategyId) {
-    const config = getConfig();
-    const strategy = config.strategies.find(s => s.id === agentConfig.strategyId);
+  if (agentConfig.customStrategyRules) {
+    strategyRules = agentConfig.customStrategyRules;
+  } else if (agentConfig.strategyId) {
+    const strategy = getStrategyById(agentConfig.strategyId);
     if (strategy) {
       if (strategy.rulesFile) {
         try { strategyRules = await fs.readFile(path.join(process.cwd(), strategy.rulesFile), 'utf-8'); } catch (err) { console.error(`Warning: Failed to load strategy rules file "${strategy.rulesFile}":`, err.message); }
@@ -46,52 +47,64 @@ export async function buildSystemPrompt(agentConfig) {
     }
   }
 
-  if (agentConfig.systemPromptTemplate === 'custom' && agentConfig.customSystemPrompt) {
-    return agentConfig.customSystemPrompt + (strategyRules ? `\n\n## Strategy Rules\n${strategyRules}` : '');
-  }
-
+  // Build trading rules from strategy
   let tradingRules = strategyRules;
   if (!tradingRules) {
-    try { tradingRules = await fs.readFile(path.join(process.cwd(), 'TRADING_RULES.md'), 'utf-8'); } catch (err) { console.error('Warning: TRADING_RULES.md not found:', err.message); tradingRules = ''; }
+    try { tradingRules = await fs.readFile(path.join(process.cwd(), 'TRADING_RULES.md'), 'utf-8'); } catch (err) { tradingRules = ''; }
   }
 
-  return `You are ${agentConfig.name || 'Prophet'}, an autonomous AI options trading agent. You run on a heartbeat loop — each time you wake up, you assess the market, manage positions, and decide what to do.
+  // Layer 1: Agent Identity (custom or default)
+  const identity = (agentConfig.systemPromptTemplate === 'custom' && agentConfig.customSystemPrompt)
+    ? agentConfig.customSystemPrompt
+    : `You are ${agentConfig.name || 'Prophet'}, an autonomous AI trading agent. You run on a heartbeat loop — each time you wake up, you assess the market, manage positions, and decide what to do.\n\n${agentConfig.description || 'You are a disciplined trading agent'}\n\nYou are running autonomously — no human is approving your actions in real-time.`;
 
-## Your Identity
-- ${agentConfig.description || 'You are a disciplined, aggressive options trader'}
-- You trade options (calls AND puts) based on conditions
-- You are running autonomously — no human is approving your actions in real-time
-- You have access to MCP tools for trading, market data, news, and analysis
+  // Layer 2: Strategy Rules
+  const rulesBlock = tradingRules
+    ? `## Strategy Rules\nThese are the hard rules you MUST follow. They define what you can trade, position sizes, risk limits, and exit criteria.\n\n${tradingRules}`
+    : '## No Strategy Rules Assigned\nNo trading rules have been configured. Use conservative defaults: max 10% per position, always use limit orders, maintain 50%+ cash.';
 
-## Each Heartbeat You Should
-1. Check the time and market status
-2. Review account status and positions
-3. Based on phase and positions, decide what to do:
-   - Pre-market: Gather intelligence, plan the day, review overnight news
-   - Market open: Execute planned trades, monitor for opportunities
-   - Midday: Monitor positions, check stops, look for setups
-   - Market close: Review positions, close expiring options, decide overnight holds
-   - After hours: Review the day, log activity, plan tomorrow
-4. Execute trades following the rules
-5. End with a summary of what you did
+  // Layer 3: System Instructions (tools, heartbeat, operational)
+  const systemInstructions = `## Available Tools
 
-## Critical Rules
-- ALWAYS use limit orders on options (never market orders)
-- Maximum 15% of portfolio per position
-- Maximum 10 positions simultaneously
-- Cut losers at -15% or thesis break
-- Take profits at +25-50%
-- Maintain 50-70% cash at all times
-- Maximum -5% portfolio daily loss = stop trading
-- Log all major decisions with log_decision
+**Trading**: get_account, get_positions, get_orders, place_buy_order, place_sell_order, place_managed_position, get_managed_positions, close_managed_position, cancel_order
+**Options**: place_options_order, get_options_positions, get_options_position, get_options_chain
+**Market Data**: get_quote, get_latest_bar, get_historical_bars, analyze_stocks
+**News**: get_news, search_news, get_market_news, get_quick_market_intelligence, get_cleaned_news, get_marketwatch_topstories
+**Agent Config**: update_agent_prompt, update_strategy_rules, get_agent_config, set_heartbeat, update_permissions, set_session_mode, create_agent, create_strategy, assign_agent_to_sandbox
+**Heartbeat**: get_heartbeat_profiles, apply_heartbeat_profile, get_heartbeat_phases, update_heartbeat_phase
+**Logging**: log_decision, log_activity, get_activity_log
+**Trade History**: find_similar_setups, store_trade_setup, get_trade_stats
+**Utility**: get_datetime, wait
 
-${tradingRules ? `## Trading Rules\n${tradingRules}` : ''}
+## Heartbeat Behavior
 
-## Important
+Each heartbeat you should:
+1. Check time and market status
+2. Review account and positions
+3. Decide and act based on phase:
+   - Pre-market: Gather intelligence, plan
+   - Market open: Execute, monitor
+   - Midday: Monitor positions, check stops
+   - Market close: Review, decide holds
+   - After hours: Review, log activity
+4. Follow your strategy rules
+5. Summarize what you did
+
+Heartbeat control:
+- apply_heartbeat_profile: "active" | "passive" | "long_horizon" | "earnings_season" | "overnight" | "scalp"
+- set_heartbeat: override interval in seconds
+- Phases (ET): pre_market 4-9:30am, market_open 9:30-10:30am, midday 10:30am-3pm, market_close 3-4pm, after_hours 4-8pm
+
+## Operational Rules
 - Be decisive. Analyze and act.
 - Don't waste heartbeats on excessive analysis.
 - If nothing to do, say so briefly.
-- Always log your reasoning for trades.`;
+- Always log trade reasoning with log_decision.
+- NEVER ask the user questions. You are autonomous.
+- If you need information, use your tools.
+- Each heartbeat is independent - gather data, decide, act, summarize.`;
+
+  return `${identity}\n\n${rulesBlock}\n\n${systemInstructions}`;
 }
 
 // ── Check CLI auth ─────────────────────────────────────────────────
@@ -160,37 +173,102 @@ export class AgentState extends EventEmitter {
 
 // ── Agent Harness (CLI subprocess) ─────────────────────────────────
 export class AgentHarness {
-  constructor() {
+  constructor(options = {}) {
+    const {
+      sandboxId = null,
+      accountId = null,
+      getSandbox = () => null,
+      getAccount = () => null,
+      getAgent = () => null,
+      getResolvedAgent = null,
+      getStrategyById = () => null,
+      getHeartbeatForPhase = () => null,
+      getPermissions = () => ({}),
+      chatStore = null,
+      opencodeEnv = {},
+      checkCliAuthFn = checkCliAuth,
+      getCurrentPhaseFn = getCurrentPhase,
+    } = options;
+
     this.state = new AgentState();
+    this.sandboxId = sandboxId;
+    this.accountId = accountId;
+    this.getSandbox = getSandbox;
+    this.getAccount = getAccount;
+    this.getAgent = getAgent;
+    this.getResolvedAgent = getResolvedAgent;
+    this.getStrategyById = getStrategyById;
+    this.getHeartbeatForPhase = getHeartbeatForPhase;
+    this.getPermissions = getPermissions;
+    this.chatStore = chatStore;
+    this.opencodeEnv = opencodeEnv;
+    this.checkCliAuthFn = checkCliAuthFn;
+    this.getCurrentPhaseFn = getCurrentPhaseFn;
     this.systemPrompt = '';
     this._timer = null;
     this._beating = false;
     this._agentConfig = null;
+    this._sandboxConfig = null;
     this._sessionId = null; // persist session across beats for context
     this._proc = null;       // current opencode subprocess
     this._pendingMessages = [];
     this._interrupted = false;
     this._beatTimeout = null;
+    this._sessionEpoch = 0;
+  }
+
+  _resolveSandbox() {
+    return this.getSandbox(this.sandboxId);
+  }
+
+  _resolveAccount() {
+    const sandbox = this._resolveSandbox();
+    return this.getAccount(this.accountId || sandbox?.accountId || null);
+  }
+
+  _resolveAgent() {
+    if (this.getResolvedAgent) {
+      return this.getResolvedAgent(this.sandboxId);
+    }
+    const sandbox = this._resolveSandbox();
+    const agentId = sandbox?.agent?.activeAgentId || null;
+    return agentId ? this.getAgent(agentId) : null;
+  }
+
+  _resolvePermissions() {
+    return this.getPermissions(this.sandboxId) || {};
+  }
+
+  async _persistSession(sessionId, metadata = {}) {
+    if (!this.chatStore || !sessionId || !this.state.activeAccountId) return;
+    await this.chatStore.startSession(this.state.activeAccountId, sessionId, {
+      sandboxId: this.sandboxId,
+      accountId: this.state.activeAccountId,
+      agentId: this.state.activeAgentId,
+      agentName: this._agentConfig?.name,
+      model: this.state.activeModel,
+      ...metadata,
+    });
+  }
+
+  async _persistMessages(sessionId, messages = []) {
+    if (!this.chatStore || !sessionId || !this.state.activeAccountId) return;
+    for (const message of messages) {
+      if (!message?.content?.trim()) continue;
+      await this.chatStore.addMessage(this.state.activeAccountId, sessionId, message);
+    }
   }
 
   async start() {
     if (this.state.running) return;
 
     // Check CLI auth
-    if (!checkCliAuth()) {
+    if (!this.checkCliAuthFn()) {
       throw new Error('OpenCode not authenticated. Run "opencode auth login" or set ANTHROPIC_API_KEY in .env');
     }
 
-    const config = getConfig();
-    this._agentConfig = getActiveAgent();
-    const model = this._agentConfig.model || config.activeModel;
-    const account = getActiveAccount();
+    await this.reloadConfig({ resetSession: true, silent: true });
 
-    this.state.activeAgentId = this._agentConfig.id;
-    this.state.activeAccountId = account?.id || null;
-    this.state.activeModel = model;
-
-    this.systemPrompt = await buildSystemPrompt(this._agentConfig);
     this.state.running = true;
     this.state.paused = false;
     this.state.stats = { totalBeats: 0, toolCalls: 0, trades: 0, errors: 0, startedAt: new Date().toISOString() };
@@ -198,9 +276,11 @@ export class AgentHarness {
     this.state.recentTrades = [];
     this._sessionId = null;
 
-    this.state.emit('status', { status: 'started', agent: this._agentConfig.name, model, account: account?.name });
+    const account = this._resolveAccount();
+    const model = this.state.activeModel;
+    this.state.emit('status', { status: 'started', sandboxId: this.sandboxId, agent: this._agentConfig.name, model, account: account?.name });
     this.state.emit('agent_log', {
-      message: `Agent "${this._agentConfig.name}" started on ${model}${account ? ` | Account: ${account.name}` : ''}`,
+      message: `Agent "${this._agentConfig.name}" started on ${model}${account ? ` | Account: ${account.name}` : ''}${this.sandboxId ? ` | Sandbox: ${this.sandboxId}` : ''}`,
       level: 'success',
     });
 
@@ -208,11 +288,44 @@ export class AgentHarness {
     this._scheduleNext();
   }
 
-  stop() {
+  async reloadConfig(options = {}) {
+    const { resetSession = true, silent = false } = options;
+
+    this._sandboxConfig = this._resolveSandbox();
+    if (!this._sandboxConfig) throw new Error(`Sandbox not found: ${this.sandboxId || 'unknown'}`);
+
+    this._agentConfig = this._resolveAgent();
+    if (!this._agentConfig) throw new Error(`Agent not found for sandbox ${this._sandboxConfig.id}`);
+
+    const account = this._resolveAccount();
+    const model = this._agentConfig.model || this._sandboxConfig.agent?.model || 'anthropic/claude-sonnet-4-6';
+
+    this.state.activeAgentId = this._agentConfig.id;
+    this.state.activeAccountId = account?.id || this._sandboxConfig.accountId || null;
+    this.state.activeModel = model;
+    this.systemPrompt = await buildSystemPrompt(this._agentConfig, {
+      getStrategyById: this.getStrategyById,
+    });
+
+    if (resetSession) {
+      this._sessionId = null;
+      this._sessionEpoch += 1;
+    }
+    if (!silent) {
+      this.state.emit('agent_log', {
+        message: `Sandbox config reloaded for ${this.sandboxId}. Prompt changes apply on the next beat.`,
+        level: 'info',
+      });
+    }
+  }
+
+  async stop() {
     this.state.running = false;
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     if (this._beatTimeout) { clearTimeout(this._beatTimeout); this._beatTimeout = null; }
-    // Kill any running subprocess
+    this._sessionEpoch += 1;
+    this._sessionId = null;
+
     const procToKill = this._proc;
     if (procToKill && !procToKill.killed) {
       procToKill.kill('SIGTERM');
@@ -220,6 +333,17 @@ export class AgentHarness {
         if (!procToKill.killed) procToKill.kill('SIGKILL');
       }, 2000);
     }
+
+    await new Promise((resolve) => {
+      const started = Date.now();
+      const check = () => {
+        if (!this._beating && (!procToKill || procToKill.killed || this._proc !== procToKill)) return resolve();
+        if (Date.now() - started > 5000) return resolve();
+        setTimeout(check, 100);
+      };
+      check();
+    });
+
     this.state.emit('status', { status: 'stopped' });
     this.state.emit('agent_log', { message: 'Agent stopped.', level: 'warning' });
   }
@@ -245,6 +369,30 @@ export class AgentHarness {
   async sendMessage(message) {
     if (!this.state.running) {
       throw new Error('Agent is not running. Start the agent first.');
+    }
+
+    const trimmed = message.trim();
+    
+    // Handle slash commands locally
+    if (trimmed.startsWith('/')) {
+      const cmd = trimmed.split(' ')[0].toLowerCase();
+      const parts = trimmed.split(' ');
+      
+      if (cmd === '/help' || cmd === '/?') {
+        this.state.emit('agent_log', { message: 'Available commands:\n/newagent - Create new agent\n/editagent <id> - Edit agent\n/agents - List agents\n/sandboxes - List portfolios\n/status - Portfolio status\n/portfolios - Portfolio status', level: 'info' });
+        return { sent: true };
+      }
+      
+      if (cmd === '/agents') {
+        const agents = this._agentConfig ? [this._agentConfig] : [];
+        this.state.emit('agent_log', { message: 'Agents: ' + agents.map(a => a.name || a.id).join(', ') + '\nUse /editagent <id> to edit', level: 'info' });
+        return { sent: true };
+      }
+      
+      if (cmd === '/newagent') {
+        this.state.emit('agent_log', { message: 'Opening agent builder... Type /help for other commands.', level: 'info' });
+        return { sent: true };
+      }
     }
 
     this.state.emit('agent_log', {
@@ -297,6 +445,7 @@ export class AgentHarness {
       check();
     });
 
+    if (!this.state.running) return;
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     await this._adHocBeat(message);
     this._scheduleNext();
@@ -304,19 +453,21 @@ export class AgentHarness {
 
   /** Cancel scheduled beat and fire an ad-hoc beat, then reschedule */
   async _fireAdHocBeat(message) {
+    if (!this.state.running) return;
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     await this._adHocBeat(message);
     this._scheduleNext();
   }
 
   async _adHocBeat(userMessage) {
+    if (!this.state.running) return;
     if (this._beating) return;
     this._beating = true;
 
     const beatNum = ++this.state.beatCount;
     this.state.stats.totalBeats = beatNum;
     this.state.lastBeatTime = new Date().toISOString();
-    const phase = getCurrentPhase();
+    const phase = this.getCurrentPhaseFn();
     this.state.phase = phase;
     const model = this.state.activeModel;
 
@@ -326,26 +477,53 @@ export class AgentHarness {
     const allMessages = [userMessage, ...queued].filter(Boolean);
     const userBlock = allMessages.map(m => `USER MESSAGE: ${m}`).join('\n');
 
-    this.state.emit('beat_start', { beat: beatNum, phase, time: this.state.lastBeatTime });
-    this.state.emit('agent_log', {
-      message: `--- Message Beat #${beatNum} ---`,
-      level: 'info',
-    });
+    this._isMessageBeat = true;
+    this.state.emit('beat_start', { beat: beatNum, phase, time: this.state.lastBeatTime, isMessage: true });
 
-    const prompt = `[MESSAGE BEAT #${beatNum}] Phase: ${PHASE_DEFAULTS[phase].label}. Time: ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET.\n\nThe user/operator is sending you a direct message. Read it carefully and act on it. You can use your tools, modify your behavior, update strategies, etc.\n\n${userBlock}`;
+    const prompt = `[MESSAGE BEAT #${beatNum}] Phase: ${PHASE_DEFAULTS[phase].label}. Time: ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET.
+
+The user/operator is sending you a direct message. Read it carefully and respond with a complete answer. You MUST respond with useful output - never just ask questions back without providing value first.
+
+## Your Available Tools (DO NOT call get_agent_config to discover these)
+
+**Trading**: get_account, get_positions, get_orders, place_buy_order, place_sell_order, place_managed_position, get_managed_positions, close_managed_position, cancel_order
+**Options**: place_options_order, get_options_positions, get_options_position, get_options_chain
+**Market Data**: get_quote, get_latest_bar, get_historical_bars, analyze_stocks
+**News**: get_news, search_news, get_market_news, get_quick_market_intelligence, get_cleaned_news, get_marketwatch_topstories, get_marketwatch_realtime
+**Intelligence**: aggregate_and_summarize_news, list_news_summaries, get_news_summary
+**Agent Config**: update_agent_prompt, update_strategy_rules, get_agent_config, set_heartbeat, update_permissions, set_session_mode, create_agent, create_strategy, assign_agent_to_sandbox
+**Heartbeat**: get_heartbeat_profiles, apply_heartbeat_profile, get_heartbeat_phases, update_heartbeat_phase
+**Logging**: log_decision, log_activity, get_activity_log
+**Trade History**: find_similar_setups, store_trade_setup, get_trade_stats
+**Utility**: get_datetime, wait
+
+## Instructions
+- If the user asks to create a new agent: use create_agent to create it, then optionally create_strategy for its rules, then assign_agent_to_sandbox to activate it.
+- If the user asks to update the current agent: use update_agent_prompt and update_strategy_rules.
+- If the user asks about trading, use your trading/market data tools.
+- Always respond with concrete actions and details. Never ask what tools you have - they are listed above.
+
+${userBlock}`;
 
     try {
       const result = await this._runClaude(prompt, model);
       if (result.error) throw new Error(result.error);
       // Text already streamed via _handleOpenCodeEvent agent_text events
       if (result.toolCalls) this.state.stats.toolCalls += result.toolCalls;
-      if (result.sessionId) this._sessionId = result.sessionId;
+      const effectiveSessionId = result.sessionEpoch === this._sessionEpoch ? result.sessionId : null;
+      if (effectiveSessionId) this._sessionId = effectiveSessionId;
+      await this._persistSession(effectiveSessionId, { mode: 'message' });
+      await this._persistMessages(effectiveSessionId, [
+        ...allMessages.map(content => ({ role: 'user', kind: 'message', beat: beatNum, content })),
+        { role: 'assistant', kind: 'message', beat: beatNum, toolCalls: result.toolCalls || 0, content: result.text || '' },
+      ]);
     } catch (err) {
       this.state.stats.errors++;
       this.state.emit('agent_log', { message: `Message beat error: ${err.message}`, level: 'error' });
     }
 
-    this.state.emit('beat_end', { beat: beatNum, phase });
+    this.state.emit('beat_end', { beat: beatNum, phase, isMessage: true });
+    this._isMessageBeat = false;
     this._beating = false;
   }
 
@@ -355,13 +533,13 @@ export class AgentHarness {
       if (override.oneTime) this.state.heartbeatOverride = null;
       return override.seconds;
     }
-    const phase = getCurrentPhase();
+    const phase = this.getCurrentPhaseFn();
     this.state.phase = phase;
     // Agent-level overrides take priority, then global config, then hardcoded defaults
     if (this._agentConfig?.heartbeatOverrides?.[phase]) {
       return this._agentConfig.heartbeatOverrides[phase];
     }
-    return getHeartbeatForPhase(phase);
+    return this.getHeartbeatForPhase(this.sandboxId, phase) || PHASE_DEFAULTS[phase]?.seconds || 600;
   }
 
   _scheduleNext() {
@@ -392,7 +570,7 @@ export class AgentHarness {
     const beatNum = ++this.state.beatCount;
     this.state.stats.totalBeats = beatNum;
     this.state.lastBeatTime = new Date().toISOString();
-    const phase = getCurrentPhase();
+    const phase = this.getCurrentPhaseFn();
     this.state.phase = phase;
     const model = this.state.activeModel;
 
@@ -403,7 +581,7 @@ export class AgentHarness {
     });
 
     // Build permissions context for the prompt
-    const perms = getPermissions();
+    const perms = this._resolvePermissions();
     const permLines = [];
     if (!perms.allowLiveTrading) permLines.push('READ-ONLY MODE: Do NOT place any orders. Analysis and monitoring only.');
     if (!perms.allowOptions) permLines.push('Options trading is DISABLED.');
@@ -428,7 +606,12 @@ export class AgentHarness {
       if (result.toolCalls) this.state.stats.toolCalls += result.toolCalls;
 
       // Save session ID for continuation
-      if (result.sessionId) this._sessionId = result.sessionId;
+      const effectiveSessionId = result.sessionEpoch === this._sessionEpoch ? result.sessionId : null;
+      if (effectiveSessionId) this._sessionId = effectiveSessionId;
+      await this._persistSession(effectiveSessionId, { mode: 'heartbeat' });
+      await this._persistMessages(effectiveSessionId, [
+        { role: 'assistant', kind: 'heartbeat', beat: beatNum, phase, toolCalls: result.toolCalls || 0, content: result.text || '' },
+      ]);
 
     } catch (err) {
       this.state.stats.errors++;
@@ -437,6 +620,13 @@ export class AgentHarness {
     }
 
     this.state.emit('beat_end', { beat: beatNum, phase });
+    
+    // Reset session if sessionMode is 'fresh' - start fresh each beat
+    if (this._agentConfig?.sessionMode === 'fresh') {
+      this._sessionId = null;
+      this.state.emit('agent_log', { message: '[session] Resetting for fresh start next beat', level: 'info' });
+    }
+    
     this._beating = false;
   }
 
@@ -445,18 +635,18 @@ export class AgentHarness {
    */
   _runClaude(prompt, model) {
     return new Promise((resolve, reject) => {
+      const sessionEpoch = this._sessionEpoch;
       // OpenCode model format: anthropic/claude-sonnet-4-6
-      const ocModel = model?.startsWith('anthropic/') ? model : `anthropic/${model || 'claude-sonnet-4-6'}`;
+      const ocModel = model?.includes('/') ? model : `anthropic/${model || 'claude-sonnet-4-6'}`;
 
       // Check max tool rounds from permissions
-      const perms = getPermissions();
+      const perms = this._resolvePermissions();
       const maxToolRounds = perms.maxToolRoundsPerBeat || 25;
 
       const args = [
         'run',
         '--format', 'json',
         '--model', ocModel,
-        '--max-turns', String(maxToolRounds),
       ];
 
       // Continue session if we have one
@@ -471,14 +661,21 @@ export class AgentHarness {
         ? `[SYSTEM INSTRUCTIONS - Follow these at all times]\n${this.systemPrompt}\n\n[END SYSTEM INSTRUCTIONS]\n\n${prompt}`
         : prompt;
 
-      this.state.emit('agent_log', {
-        message: `Spawning opencode (${ocModel})...`,
-        level: 'info',
-      });
+      if (!this._isMessageBeat) {
+        this.state.emit('agent_log', {
+          message: `Spawning opencode (${ocModel})...`,
+          level: 'info',
+        });
+      }
 
       const proc = spawn('opencode', args, {
         cwd: process.cwd(),
-        env: { ...process.env },
+        env: {
+          ...process.env,
+          ...this.opencodeEnv,
+          OPENPROPHET_SANDBOX_ID: this.sandboxId || '',
+          OPENPROPHET_ACCOUNT_ID: this.state.activeAccountId || this.accountId || '',
+        },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
 
@@ -563,7 +760,7 @@ export class AgentHarness {
             message: `Beat interrupted by user (collected ${fullText.length} chars, ${toolCalls} tools before interrupt)`,
             level: 'warning',
           });
-          resolve({ text: fullText, toolCalls, sessionId, interrupted: true });
+          resolve({ text: fullText, toolCalls, sessionId, interrupted: true, sessionEpoch });
           return;
         }
 
@@ -573,11 +770,11 @@ export class AgentHarness {
         });
 
         if (code !== 0 && code !== null && !fullText) {
-          resolve({ error: `opencode exited with code ${code} signal ${signal}`, text: fullText, toolCalls, sessionId });
+          resolve({ error: `opencode exited with code ${code} signal ${signal}`, text: fullText, toolCalls, sessionId, sessionEpoch });
         } else if (signal && !fullText) {
-          resolve({ error: `opencode killed by ${signal}`, text: fullText, toolCalls, sessionId });
+          resolve({ error: `opencode killed by ${signal}`, text: fullText, toolCalls, sessionId, sessionEpoch });
         } else {
-          resolve({ text: fullText, toolCalls, sessionId });
+          resolve({ text: fullText, toolCalls, sessionId, sessionEpoch });
         }
       });
 

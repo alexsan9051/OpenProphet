@@ -31,9 +31,8 @@ main
 .vscode/
 .idea/
 
-# Data
-data/*.db
-data/*.db-*
+# Data (contains account secrets, databases, chat history)
+data/
 
 # Node
 node_modules/
