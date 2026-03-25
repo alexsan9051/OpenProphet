@@ -60,6 +60,11 @@ func NewLocalStorage(dbPath string) (*LocalStorage, error) {
 	}, nil
 }
 
+// DB returns the underlying GORM database for direct queries (e.g. analytics)
+func (s *LocalStorage) DB() *gorm.DB {
+	return s.db
+}
+
 // SaveBars saves multiple bars to the database
 func (s *LocalStorage) SaveBars(bars []*interfaces.Bar) error {
 	if len(bars) == 0 {

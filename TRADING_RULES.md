@@ -130,8 +130,8 @@
 
 ## Decision Logging
 
-**Rule:** Log all major decisions to `decisive_actions/`
-- Before: Major position entries (optional but recommended)
+**Rule:** Log all major decisions to `decisive_actions/` — **required for any entry over $5K**
+- Before: Major position entries (required >$5K, recommended otherwise)
 - After: End of day summary, major exits, strategic decisions
 - Format: Use `mcp__prophet__log_decision` tool
 - Purpose: Audit trail, learning from mistakes
@@ -140,6 +140,11 @@
 - Track: Position checks, analysis, intelligence gathering
 - Format: Use `mcp__prophet__log_activity` tool
 - Review: Weekly to identify patterns
+
+**Rule:** Always populate `notes` on every managed position entry
+- Required fields: (1) thesis — why you're entering, (2) catalyst — what you're waiting for, (3) exit criteria — conditions that invalidate the thesis beyond hard stops
+- Example: "Breakout above 200MA on above-avg volume. Waiting for NVDA earnings catalyst 12/11. Exit early if price closes below $182 support or SPY drops >2% intraday."
+- Rationale: Notes persist across session resets and allow full context recovery via `get_managed_positions`
 
 ---
 

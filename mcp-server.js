@@ -880,6 +880,88 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
       },
+      // ── Performance Analytics Tools ─────────────────────────────
+      {
+        name: 'get_performance_summary',
+        description: 'Get aggregate trading performance metrics: win rate, profit factor, avg win/loss, total P&L, best/worst trade, avg hold duration. Use this to evaluate overall strategy health before deciding on rule changes.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            since: {
+              type: 'string',
+              description: 'Optional ISO 8601 date to look back from (e.g. "2025-09-01T00:00:00Z"). Defaults to last 30 days.',
+            },
+          },
+        },
+      },
+      {
+        name: 'get_equity_curve',
+        description: 'Get the portfolio value over time as a time series. Use this to see growth or decline trends and identify problematic periods.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            since: {
+              type: 'string',
+              description: 'Optional ISO 8601 start date. Defaults to last 30 days.',
+            },
+          },
+        },
+      },
+      {
+        name: 'get_symbol_performance',
+        description: 'Get per-ticker breakdown: win rate, total P&L, average P&L, trade count for each symbol traded. Use this to identify which tickers are helping or hurting performance.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            since: {
+              type: 'string',
+              description: 'Optional ISO 8601 start date. Defaults to last 30 days.',
+            },
+          },
+        },
+      },
+      {
+        name: 'get_drawdown_stats',
+        description: 'Get max drawdown %, current drawdown %, peak portfolio value, and current portfolio value. Use this to assess risk exposure and whether the strategy is in a recovery phase.',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      {
+        name: 'get_recent_trades',
+        description: 'Get a list of recent closed trades with full detail: entry/exit price, P&L, duration, strategy. Use this to review specific trade decisions before modifying rules.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            limit: {
+              type: 'number',
+              description: 'Max number of trades to return (default 50)',
+            },
+            symbol: {
+              type: 'string',
+              description: 'Optional: filter by symbol (e.g. "SPY")',
+            },
+            since: {
+              type: 'string',
+              description: 'Optional ISO 8601 start date. Defaults to last 30 days.',
+            },
+          },
+        },
+      },
+      {
+        name: 'get_strategy_breakdown',
+        description: 'Get performance broken down by strategy type (scalp vs. swing, etc.): win rate, total P&L, trade count per strategy. Use this to decide whether to restrict or expand a strategy type.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            since: {
+              type: 'string',
+              description: 'Optional ISO 8601 start date. Defaults to last 30 days.',
+            },
+          },
+        },
+      },
       // ── Agent Self-Modification Tools ──────────────────────────
       {
         name: 'update_agent_prompt',
@@ -953,6 +1035,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             mode: { type: 'string', description: 'Session mode: "continuous" or "fresh"' },
           },
           required: ['mode'],
+        },
+      },
+      {
+        name: 'set_session_reset',
+        description: 'Configure when the conversation session resets to prevent unbounded context growth. "daily" resets at the start of each new trading day (recommended — keeps intra-day memory, cleans up overnight). "beat_count" resets after N beats (use max_beats to set the threshold). "none" never resets (unbounded growth, not recommended for long runs).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            strategy: { type: 'string', description: 'Reset strategy: "daily", "beat_count", or "none"' },
+            max_beats: { type: 'number', description: 'Max beats per session when strategy is "beat_count" (default 50)' },
+          },
+          required: ['strategy'],
         },
       },
       {
@@ -2013,6 +2107,58 @@ Worst Trade: ${stats.worst_result_pct.toFixed(1)}% ($${stats.worst_result_dollar
         };
       }
 
+      // ── Performance Analytics Tools ─────────────────────────────
+      case 'get_performance_summary': {
+        const qs = args.since ? `?since=${encodeURIComponent(args.since)}` : '';
+        const data = await callTradingBot(`/analytics/summary${qs}`);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+        };
+      }
+
+      case 'get_equity_curve': {
+        const qs = args.since ? `?since=${encodeURIComponent(args.since)}` : '';
+        const data = await callTradingBot(`/analytics/equity-curve${qs}`);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+        };
+      }
+
+      case 'get_symbol_performance': {
+        const qs = args.since ? `?since=${encodeURIComponent(args.since)}` : '';
+        const data = await callTradingBot(`/analytics/by-symbol${qs}`);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+        };
+      }
+
+      case 'get_drawdown_stats': {
+        const data = await callTradingBot('/analytics/drawdown');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+        };
+      }
+
+      case 'get_recent_trades': {
+        const params = [];
+        if (args.limit) params.push(`limit=${args.limit}`);
+        if (args.symbol) params.push(`symbol=${encodeURIComponent(args.symbol)}`);
+        if (args.since) params.push(`since=${encodeURIComponent(args.since)}`);
+        const qs = params.length ? `?${params.join('&')}` : '';
+        const data = await callTradingBot(`/analytics/trades${qs}`);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+        };
+      }
+
+      case 'get_strategy_breakdown': {
+        const qs = args.since ? `?since=${encodeURIComponent(args.since)}` : '';
+        const data = await callTradingBot(`/analytics/by-strategy${qs}`);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+        };
+      }
+
       // ── Agent Self-Modification Tools ──────────────────────────
       case 'update_agent_prompt': {
         const { prompt } = args;
@@ -2158,6 +2304,22 @@ Worst Trade: ${stats.worst_result_pct.toFixed(1)}% ($${stats.worst_result_dollar
           ? 'Session mode set to "fresh" - each heartbeat will start with a fresh context. Good for long_horizon strategies.'
           : 'Session mode set to "continuous" - conversation context persists across heartbeats.';
         return { content: [{ type: 'text', text: msg }] };
+      }
+
+      case 'set_session_reset': {
+        const { strategy, max_beats } = args;
+        if (!['daily', 'beat_count', 'none'].includes(strategy)) {
+          return { content: [{ type: 'text', text: 'Invalid strategy. Use "daily", "beat_count", or "none".' }], isError: true };
+        }
+        const body = { sessionResetStrategy: strategy };
+        if (max_beats) body.maxBeatsPerSession = max_beats;
+        await agentAxios.put(`${AGENT_URL}/api/sandboxes/${OPENPROPHET_SANDBOX_ID}/agent/overrides`, body);
+        const msgs = {
+          daily: 'Session reset set to "daily" — context resets each morning, intra-day memory preserved.',
+          beat_count: `Session reset set to "beat_count" — resets after ${max_beats || 50} beats.`,
+          none: 'Session reset disabled — context accumulates indefinitely (not recommended for long runs).',
+        };
+        return { content: [{ type: 'text', text: msgs[strategy] }] };
       }
 
       case 'create_agent': {

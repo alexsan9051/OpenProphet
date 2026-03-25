@@ -1427,6 +1427,22 @@ app.get('/api/portfolio/orders', async (req, res) => {
   } catch { res.status(502).json({ error: 'Trading bot unavailable' }); }
 });
 
+// ── Analytics Proxy ────────────────────────────────────────────────
+const analyticsRoutes = ['summary', 'equity-curve', 'by-symbol', 'drawdown', 'trades', 'by-strategy'];
+analyticsRoutes.forEach(route => {
+  app.get(`/api/analytics/${route}`, async (req, res) => {
+    try {
+      const client = getGoClientForSandbox(req.query.sandboxId);
+      if (!client) return res.status(404).json({ error: 'Sandbox trading backend unavailable' });
+      const qs = new URLSearchParams(req.query);
+      qs.delete('sandboxId');
+      const qsStr = qs.toString() ? `?${qs.toString()}` : '';
+      const { data } = await client.get(`/api/v1/analytics/${route}${qsStr}`);
+      res.json(data);
+    } catch { res.status(502).json({ error: 'Trading bot unavailable' }); }
+  });
+});
+
 // ── Auth (OpenCode) ────────────────────────────────────────────────
 app.get('/api/auth/status', (req, res) => {
   // API key in env is the fastest check

@@ -102,6 +102,8 @@ const DEFAULT_AGENT_OVERRIDES = {
   customStrategyRules: null,
   heartbeatOverrides: {},
   sessionMode: 'continuous', // 'continuous' or 'fresh' - 'fresh' starts new session each beat
+  sessionResetStrategy: 'daily', // 'daily' | 'beat_count' | 'none'
+  maxBeatsPerSession: 50,        // used when sessionResetStrategy === 'beat_count'
 };
 
 function defaultAgents() {

@@ -7,6 +7,11 @@ import path from 'path';
 
 // Default max tool rounds; overridden by permissions config at runtime
 
+// Returns current calendar date in ET timezone as 'YYYY-MM-DD'
+function getTodayET() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+
 // ── Phase Configuration ────────────────────────────────────────────
 export const PHASE_DEFAULTS = {
   pre_market:   { seconds: 900,  label: 'Pre-Market',    range: [240, 570]  },
@@ -219,8 +224,10 @@ export class AgentHarness {
     this._beating = false;
     this._agentConfig = null;
     this._sandboxConfig = null;
-    this._sessionId = null; // persist session across beats for context
-    this._proc = null;       // current opencode subprocess
+    this._sessionId = null;       // persist session across beats for context
+    this._sessionStartDate = null; // ET date string when current session began ('YYYY-MM-DD')
+    this._beatsInSession = 0;      // beats completed in current session
+    this._proc = null;             // current opencode subprocess
     this._pendingMessages = [];
     this._interrupted = false;
     this._beatTimeout = null;
@@ -617,7 +624,13 @@ ${userBlock}`;
 
       // Save session ID for continuation
       const effectiveSessionId = result.sessionEpoch === this._sessionEpoch ? result.sessionId : null;
-      if (effectiveSessionId) this._sessionId = effectiveSessionId;
+      if (effectiveSessionId) {
+        const isNewSession = this._sessionId !== effectiveSessionId;
+        this._sessionId = effectiveSessionId;
+        if (isNewSession && !this._sessionStartDate) {
+          this._sessionStartDate = getTodayET();
+        }
+      }
       await this._persistSession(effectiveSessionId, { mode: 'heartbeat' });
       await this._persistMessages(effectiveSessionId, [
         { role: 'assistant', kind: 'heartbeat', beat: beatNum, phase, toolCalls: result.toolCalls || 0, content: result.text || '' },
@@ -634,9 +647,29 @@ ${userBlock}`;
     // Reset session if sessionMode is 'fresh' - start fresh each beat
     if (this._agentConfig?.sessionMode === 'fresh') {
       this._sessionId = null;
+      this._sessionStartDate = null;
+      this._beatsInSession = 0;
       this.state.emit('agent_log', { message: '[session] Resetting for fresh start next beat', level: 'info' });
+    } else {
+      // Smart session reset: daily or beat_count
+      this._beatsInSession++;
+      const strategy = this._agentConfig?.sessionResetStrategy ?? 'daily';
+      const maxBeats = this._agentConfig?.maxBeatsPerSession ?? 50;
+      const todayET = getTodayET();
+
+      if (strategy === 'daily' && this._sessionStartDate && this._sessionStartDate !== todayET) {
+        this._sessionId = null;
+        this._sessionStartDate = null;
+        this._beatsInSession = 0;
+        this.state.emit('agent_log', { message: '[session] Daily reset — new trading day, fresh context next beat', level: 'info' });
+      } else if (strategy === 'beat_count' && this._beatsInSession >= maxBeats) {
+        this._sessionId = null;
+        this._sessionStartDate = null;
+        this._beatsInSession = 0;
+        this.state.emit('agent_log', { message: `[session] Beat count reset after ${maxBeats} beats`, level: 'info' });
+      }
     }
-    
+
     this._beating = false;
   }
 

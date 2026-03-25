@@ -506,6 +506,7 @@
     <button class="tab" data-tab="trades" onclick="switchTab('trades')">Trades</button>
     <button class="tab" data-tab="history" onclick="switchTab('history')">History</button>
     <button class="tab tab-portfolio-mobile" data-tab="portfolio" onclick="switchTab('portfolio')"><span class="tab-full">Portfolio</span><span class="tab-short">Port</span></button>
+    <button class="tab" data-tab="performance" onclick="switchTab('performance')"><span class="tab-full">Performance</span><span class="tab-short">Perf</span></button>
     <button class="tab" data-tab="agents" onclick="switchTab('agents')">Agents</button>
     <button class="tab" data-tab="accounts" onclick="switchTab('accounts')"><span class="tab-full">Accounts</span><span class="tab-short">Accts</span></button>
     <button class="tab" data-tab="plugins" onclick="switchTab('plugins')"><span class="tab-full">Plugins</span><span class="tab-short">Plug</span></button>
@@ -553,6 +554,56 @@
           <div class="terminal" id="history-transcript" style="min-height:280px;max-height:520px">
             <div class="log-entry info"><span class="time">--:--:--</span>Select a prior session to view the transcript.</div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Performance Panel -->
+    <div class="panel" id="panel-performance">
+      <div class="settings-content">
+        <h2>Performance</h2>
+        <p class="subtitle">Strategy results — used by Claude to evaluate and iterate on trading rules</p>
+
+        <!-- Summary Stats -->
+        <div class="section">
+          <div class="section-title" style="display:flex;align-items:center;justify-content:space-between">
+            <span>Summary</span>
+            <select id="perf-since" onchange="loadPerformance()" style="font-size:11px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--paper);color:var(--ink)">
+              <option value="7">Last 7 days</option>
+              <option value="30" selected>Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="365">All time</option>
+            </select>
+          </div>
+          <div id="perf-stats-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin-top:8px">
+            <div class="no-data" style="grid-column:1/-1">Loading performance data...</div>
+          </div>
+        </div>
+
+        <!-- Equity Curve -->
+        <div class="section">
+          <div class="section-title">Equity Curve</div>
+          <div id="perf-equity-chart" style="height:180px;background:var(--bg-dark);border:1px solid var(--border);border-radius:6px;display:flex;align-items:center;justify-content:center;margin-top:8px">
+            <span style="color:var(--ink-faint);font-size:12px">No equity data yet</span>
+          </div>
+        </div>
+
+        <!-- By Symbol -->
+        <div class="section">
+          <div class="section-title">By Symbol</div>
+          <div id="perf-symbol-table"><div class="no-data">No trade data yet</div></div>
+        </div>
+
+        <!-- By Strategy -->
+        <div class="section">
+          <div class="section-title">By Strategy</div>
+          <div id="perf-strategy-table"><div class="no-data">No trade data yet</div></div>
+        </div>
+
+        <!-- Recent Trades -->
+        <div class="section">
+          <div class="section-title">Recent Trades</div>
+          <div id="perf-trades-table"><div class="no-data">No closed trades yet</div></div>
         </div>
       </div>
     </div>
@@ -941,6 +992,145 @@ function sandboxQueryString() {
   return sid ? '?sandboxId=' + encodeURIComponent(sid) : '';
 }
 
+// ── Performance Tab ──────────────────────────────────────────────
+async function loadPerformance() {
+  const days = parseInt(document.getElementById('perf-since')?.value || '30', 10);
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const qs = sandboxQueryString();
+  const sep = qs ? '&' : '?';
+
+  function fmt$(v) { return (v >= 0 ? '+$' : '-$') + Math.abs(v).toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2}); }
+  function fmtPct(v) { return (v >= 0 ? '+' : '') + v.toFixed(1) + '%'; }
+  function color(v) { return v >= 0 ? 'var(--success)' : 'var(--error)'; }
+
+  // Summary
+  try {
+    const r = await fetch(withAuthUrl(`/api/analytics/summary${qs}${sep}since=${encodeURIComponent(since)}`));
+    const d = await r.json();
+    const grid = document.getElementById('perf-stats-grid');
+    if (r.ok) {
+      const stats = [
+        ['Trades', d.total_trades],
+        ['Win Rate', fmtPct(d.win_rate || 0)],
+        ['Profit Factor', d.profit_factor === 999 ? '∞' : (d.profit_factor || 0).toFixed(2)],
+        ['Total P&L', fmt$(d.total_pnl || 0)],
+        ['Return %', fmtPct(d.total_pnl_pct || 0)],
+        ['Avg Win', fmt$(d.avg_win || 0)],
+        ['Avg Loss', fmt$(d.avg_loss || 0)],
+        ['Best Trade', fmt$(d.best_trade || 0)],
+        ['Worst Trade', fmt$(d.worst_trade || 0)],
+        ['Avg Hold', ((d.avg_duration_hours || 0)).toFixed(1) + 'h'],
+      ];
+      grid.innerHTML = stats.map(([label, val]) => {
+        const isNum = typeof val === 'string' && (val.includes('$') || val.includes('%'));
+        const isNeg = isNum && (val.startsWith('-') || val.startsWith('−'));
+        const c = isNum ? (isNeg ? 'var(--error)' : 'var(--success)') : 'var(--ink)';
+        return `<div style="background:var(--bg-dark);border:1px solid var(--border);border-radius:6px;padding:10px 12px">
+          <div style="font-size:10px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:0.5px">${label}</div>
+          <div style="font-size:16px;font-weight:600;color:${c};margin-top:3px;font-family:'IBM Plex Mono',monospace">${val}</div>
+        </div>`;
+      }).join('');
+    } else {
+      grid.innerHTML = '<div class="no-data" style="grid-column:1/-1">No trade data yet. Start the agent and wait for positions to open and close.</div>';
+    }
+  } catch { document.getElementById('perf-stats-grid').innerHTML = '<div class="no-data" style="grid-column:1/-1">Analytics unavailable</div>'; }
+
+  // Equity curve (simple sparkline using SVG)
+  try {
+    const r = await fetch(withAuthUrl(`/api/analytics/equity-curve${qs}${sep}since=${encodeURIComponent(since)}`));
+    const d = await r.json();
+    const el = document.getElementById('perf-equity-chart');
+    const pts = d.points || [];
+    if (pts.length >= 2) {
+      const vals = pts.map(p => p.value);
+      const min = Math.min(...vals), max = Math.max(...vals);
+      const range = max - min || 1;
+      const W = 800, H = 160, pad = 10;
+      const xs = pts.map((_, i) => pad + (i / (pts.length - 1)) * (W - 2*pad));
+      const ys = pts.map(p => H - pad - ((p.value - min) / range) * (H - 2*pad));
+      const polyline = xs.map((x, i) => `${x},${ys[i]}`).join(' ');
+      const isUp = vals[vals.length - 1] >= vals[0];
+      const lineColor = isUp ? 'var(--success)' : 'var(--error)';
+      el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:100%;padding:4px" preserveAspectRatio="none">
+        <polyline points="${polyline}" fill="none" stroke="${lineColor}" stroke-width="2" stroke-linejoin="round"/>
+      </svg>`;
+    } else {
+      el.innerHTML = '<span style="color:var(--ink-faint);font-size:12px">Insufficient data for equity curve</span>';
+    }
+  } catch {}
+
+  // Symbol table
+  try {
+    const r = await fetch(withAuthUrl(`/api/analytics/by-symbol${qs}${sep}since=${encodeURIComponent(since)}`));
+    const d = await r.json();
+    const el = document.getElementById('perf-symbol-table');
+    const rows = (d.symbols || []).sort((a, b) => b.total_pnl - a.total_pnl);
+    if (rows.length) {
+      el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="border-bottom:1px solid var(--border);color:var(--ink-faint)">${['Symbol','Trades','Win%','Avg P&L','Total P&L'].map(h=>`<th style="text-align:left;padding:4px 8px;font-weight:600">${h}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map(r=>`<tr style="border-bottom:1px solid var(--rule-light)">
+          <td style="padding:4px 8px;font-weight:600">${r.symbol}</td>
+          <td style="padding:4px 8px">${r.trades}</td>
+          <td style="padding:4px 8px;color:${color(r.win_rate-50)}">${r.win_rate.toFixed(0)}%</td>
+          <td style="padding:4px 8px;color:${color(r.avg_pnl)};font-family:'IBM Plex Mono',monospace">${fmt$(r.avg_pnl)}</td>
+          <td style="padding:4px 8px;color:${color(r.total_pnl)};font-family:'IBM Plex Mono',monospace">${fmt$(r.total_pnl)}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+    } else {
+      el.innerHTML = '<div class="no-data">No symbol data yet</div>';
+    }
+  } catch {}
+
+  // Strategy table
+  try {
+    const r = await fetch(withAuthUrl(`/api/analytics/by-strategy${qs}${sep}since=${encodeURIComponent(since)}`));
+    const d = await r.json();
+    const el = document.getElementById('perf-strategy-table');
+    const rows = (d.strategies || []).sort((a, b) => b.total_pnl - a.total_pnl);
+    if (rows.length) {
+      el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="border-bottom:1px solid var(--border);color:var(--ink-faint)">${['Strategy','Trades','Win%','Avg P&L','Total P&L'].map(h=>`<th style="text-align:left;padding:4px 8px;font-weight:600">${h}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map(r=>`<tr style="border-bottom:1px solid var(--rule-light)">
+          <td style="padding:4px 8px;font-weight:600">${r.strategy}</td>
+          <td style="padding:4px 8px">${r.trades}</td>
+          <td style="padding:4px 8px;color:${color(r.win_rate-50)}">${r.win_rate.toFixed(0)}%</td>
+          <td style="padding:4px 8px;color:${color(r.avg_pnl)};font-family:'IBM Plex Mono',monospace">${fmt$(r.avg_pnl)}</td>
+          <td style="padding:4px 8px;color:${color(r.total_pnl)};font-family:'IBM Plex Mono',monospace">${fmt$(r.total_pnl)}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+    } else {
+      el.innerHTML = '<div class="no-data">No strategy data yet</div>';
+    }
+  } catch {}
+
+  // Recent trades
+  try {
+    const r = await fetch(withAuthUrl(`/api/analytics/trades${qs}${sep}since=${encodeURIComponent(since)}&limit=20`));
+    const d = await r.json();
+    const el = document.getElementById('perf-trades-table');
+    const trades = d.trades || [];
+    if (trades.length) {
+      el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="border-bottom:1px solid var(--border);color:var(--ink-faint)">${['Symbol','Side','Entry','Exit','P&L','Strategy','Closed'].map(h=>`<th style="text-align:left;padding:4px 8px;font-weight:600">${h}</th>`).join('')}</tr></thead>
+        <tbody>${trades.map(t=>{
+          const closed = new Date(t.exit_time).toLocaleDateString('en-US',{month:'short',day:'numeric'});
+          return `<tr style="border-bottom:1px solid var(--rule-light)">
+            <td style="padding:4px 8px;font-weight:600">${t.symbol}</td>
+            <td style="padding:4px 8px">${t.side}</td>
+            <td style="padding:4px 8px;font-family:'IBM Plex Mono',monospace">$${t.entry_price.toFixed(2)}</td>
+            <td style="padding:4px 8px;font-family:'IBM Plex Mono',monospace">$${t.exit_price.toFixed(2)}</td>
+            <td style="padding:4px 8px;color:${color(t.pnl)};font-family:'IBM Plex Mono',monospace">${fmt$(t.pnl)} (${fmtPct(t.pnl_pct)})</td>
+            <td style="padding:4px 8px;color:var(--ink-muted)">${t.strategy||'—'}</td>
+            <td style="padding:4px 8px;color:var(--ink-faint)">${closed}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>`;
+    } else {
+      el.innerHTML = '<div class="no-data">No closed trades yet</div>';
+    }
+  } catch {}
+}
+
 function withAuthUrl(url) {
   if (!authToken || typeof url !== 'string' || !url.startsWith('/api/')) return url;
   const sep = url.includes('?') ? '&' : '?';
@@ -972,6 +1162,7 @@ function switchTab(id) {
   const panel = document.getElementById('panel-' + id);
   if (panel) panel.classList.add('active');
   if (id === 'history' && !historyState.loaded) loadHistoryPanel();
+  if (id === 'performance') loadPerformance();
 }
 
 async function refreshSelectedSandboxView() {

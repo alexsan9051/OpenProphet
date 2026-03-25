@@ -114,6 +114,10 @@ func main() {
 	positionManager := services.NewPositionManager(tradingService, dataService, storageService)
 	positionController := controllers.NewPositionManagementController(positionManager)
 
+	// Create analytics service
+	analyticsService := services.NewAnalyticsService(storageService.DB())
+	analyticsController := controllers.NewAnalyticsController(analyticsService)
+
 	// Create activity logger
 	activityLogDir := os.Getenv("ACTIVITY_LOG_DIR")
 	if activityLogDir == "" {
@@ -129,7 +133,7 @@ func main() {
 	}
 
 	// Setup HTTP server
-	router := setupRouter(orderController, newsController, intelligenceController, positionController, activityController, economicFeedsController)
+	router := setupRouter(orderController, newsController, intelligenceController, positionController, activityController, economicFeedsController, analyticsController)
 
 	// Start data cleanup routine
 	go startDataCleanup(ctx, storageService, cfg.DataRetentionDays, logger)
@@ -159,7 +163,7 @@ func main() {
 	}
 }
 
-func setupRouter(orderController *controllers.OrderController, newsController *controllers.NewsController, intelligenceController *controllers.IntelligenceController, positionController *controllers.PositionManagementController, activityController *controllers.ActivityController, economicFeedsController *controllers.EconomicFeedsController) *gin.Engine {
+func setupRouter(orderController *controllers.OrderController, newsController *controllers.NewsController, intelligenceController *controllers.IntelligenceController, positionController *controllers.PositionManagementController, activityController *controllers.ActivityController, economicFeedsController *controllers.EconomicFeedsController, analyticsController *controllers.AnalyticsController) *gin.Engine {
 	router := gin.Default()
 
 	// Enable CORS
@@ -243,6 +247,14 @@ func setupRouter(orderController *controllers.OrderController, newsController *c
 		api.POST("/activity/session/start", activityController.HandleStartSession)
 		api.POST("/activity/session/end", activityController.HandleEndSession)
 		api.POST("/activity/log", activityController.HandleLogActivity)
+
+		// Analytics endpoints
+		api.GET("/analytics/summary", analyticsController.HandleGetSummary)
+		api.GET("/analytics/equity-curve", analyticsController.HandleGetEquityCurve)
+		api.GET("/analytics/by-symbol", analyticsController.HandleGetBySymbol)
+		api.GET("/analytics/drawdown", analyticsController.HandleGetDrawdown)
+		api.GET("/analytics/trades", analyticsController.HandleGetTrades)
+		api.GET("/analytics/by-strategy", analyticsController.HandleGetByStrategy)
 	}
 
 	// Serve dashboard
