@@ -116,7 +116,7 @@ The heartbeat agent can use three different AI runners, selected per-sandbox via
 |--------|-------------|---------|------|---------|
 | OpenCode | `opencode` (default) | `opencode run` | Per-token | Persistent across beats |
 | Claude Code | `claude-code` | `claude --print` | Included in Claude Pro/Max | Persistent across beats |
-| Codex | `codex` | `codex exec` | Included in ChatGPT Plus | Fresh each beat |
+| Codex | `codex` | `codex exec` | Included in ChatGPT Plus | Persistent across beats |
 
 **To switch to Claude Code (no extra cost with Claude Pro):**
 1. Log in: `claude login`
@@ -127,7 +127,7 @@ The heartbeat agent can use three different AI runners, selected per-sandbox via
 1. Log in: `codex login`
 2. Set `runnerType: "codex"` on the sandbox
 3. Set the agent model to an `openai/` model (e.g. `openai/gpt-5.4`)
-4. Note: Codex does not preserve context across beats (no session continuation)
+4. Sessions persist across beats via `codex exec resume <sessionId>` (continuous mode by default). Set `sessionMode: "fresh"` in config to force a new session each beat.
 
 **MCP config files** (required for each runner's tool access):
 - Claude Code: `.mcp.json` (auto-detected in project root)
