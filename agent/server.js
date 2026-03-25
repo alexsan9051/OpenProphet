@@ -75,12 +75,17 @@ async function startGoBackend(account) {
   }
 
   // Build binary if needed
-  const binaryPath = path.join(PROJECT_ROOT, 'prophet_bot');
+  const binaryName = process.platform === 'win32' ? 'prophet_bot.exe' : 'prophet_bot';
+  const binaryPath = path.join(PROJECT_ROOT, binaryName);
   try {
     const fs = await import('fs');
     if (!fs.existsSync(binaryPath)) {
       console.log('  Building Go binary...');
-      execSync('go build -o prophet_bot ./cmd/bot', { cwd: PROJECT_ROOT, timeout: 60000 });
+      const buildEnv = { ...process.env, CGO_ENABLED: '1' };
+      if (process.platform === 'win32') {
+        buildEnv.PATH = `C:\\msys64\\mingw64\\bin;${buildEnv.PATH || ''}`;
+      }
+      execSync(`go build -o ${binaryName} ./cmd/bot`, { cwd: PROJECT_ROOT, timeout: 60000, env: buildEnv });
     }
   } catch (err) {
     console.error('  Failed to build Go binary:', err.message);
