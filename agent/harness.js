@@ -1126,7 +1126,7 @@ ${userBlock}`;
   /**
    * Run `codex exec --json` as subprocess.
    * Uses the user's ChatGPT Plus subscription — no extra per-token cost.
-   * Note: Codex does not support simple session IDs; each beat starts fresh.
+   * Supports continuous mode via `codex exec resume <sessionId>`.
    */
   async _runCodexRunner(prompt, model) {
     // Write system prompt to a file so Codex can load it via --model-instructions-file
@@ -1134,21 +1134,30 @@ ${userBlock}`;
     await fs.mkdir(path.dirname(instructionsPath), { recursive: true });
     await fs.writeFile(instructionsPath, this.systemPrompt);
 
-    return new Promise((resolve, reject) => {
-      const sessionEpoch = this._sessionEpoch;
-      // Codex uses model names without the provider prefix
-      const codexModel = (model || 'gpt-5.4').replace(/^openai\//, '');
+    const sessionEpoch = this._sessionEpoch;
+    const codexModel = (model || 'gpt-5.4').replace(/^openai\//, '');
+    const sessionMode = this._agentConfig?.sessionMode === 'fresh' ? 'fresh' : 'continuous';
+    const shouldResume = sessionMode === 'continuous' && !!this._sessionId;
 
-      const args = [
-        'exec', '--json',
-        '--model', codexModel,
-        '-a', 'never',
-        '--model-instructions-file', instructionsPath,
-        prompt,
-      ];
+    const runAttempt = (resumeSessionId = null) => new Promise((resolve, reject) => {
+      const isResume = !!resumeSessionId;
+      const args = isResume
+        ? ['exec', 'resume', resumeSessionId, '--json', '--model', codexModel, prompt]
+        : [
+            'exec', '--json',
+            '--model', codexModel,
+            '-a', 'never',
+            '--model-instructions-file', instructionsPath,
+            prompt,
+          ];
 
       if (!this._isMessageBeat) {
-        this.state.emit('agent_log', { message: `Spawning codex (${codexModel})...`, level: 'info' });
+        this.state.emit('agent_log', {
+          message: isResume
+            ? `Spawning codex (${codexModel}) [resume]...`
+            : `Spawning codex (${codexModel})...`,
+          level: 'info',
+        });
       }
 
       const proc = spawn('codex', args, {
@@ -1167,9 +1176,10 @@ ${userBlock}`;
 
       let fullText = '';
       let toolCalls = 0;
-      let sessionId = null;
+      let sessionId = resumeSessionId || null;
       let buffer = '';
       let totalTokens = 0;
+      let stderrText = '';
 
       proc.stdout.on('data', (chunk) => {
         buffer += chunk.toString();
@@ -1191,7 +1201,9 @@ ${userBlock}`;
 
       proc.stderr.on('data', (chunk) => {
         const msg = chunk.toString().trim();
-        if (msg) this.state.emit('agent_log', { message: `[codex] ${msg}`, level: 'info' });
+        if (!msg) return;
+        stderrText += `${stderrText ? '\n' : ''}${msg}`;
+        this.state.emit('agent_log', { message: `[codex] ${msg}`, level: 'info' });
       });
 
       proc.on('error', (err) => {
@@ -1226,7 +1238,7 @@ ${userBlock}`;
             message: `Beat interrupted by user (${fullText.length} chars, ${toolCalls} tools)`,
             level: 'warning',
           });
-          resolve({ text: fullText, toolCalls, sessionId, interrupted: true, sessionEpoch });
+          resolve({ text: fullText, toolCalls, sessionId, interrupted: true, sessionEpoch, shouldFallbackFresh: false });
           return;
         }
 
@@ -1235,12 +1247,15 @@ ${userBlock}`;
           level: code === 0 ? 'info' : 'warning',
         });
 
+        const shouldFallbackFresh = isResume && code !== 0 && !fullText && toolCalls === 0;
         if (code !== 0 && code !== null && !fullText) {
-          resolve({ error: `codex exited with code ${code} signal ${signal}`, text: fullText, toolCalls, sessionId, sessionEpoch });
+          const suffix = stderrText ? ` | ${stderrText.substring(0, 300)}` : '';
+          resolve({ error: `codex exited with code ${code} signal ${signal}${suffix}`, text: fullText, toolCalls, sessionId, sessionEpoch, shouldFallbackFresh });
         } else if (signal && !fullText) {
-          resolve({ error: `codex killed by ${signal}`, text: fullText, toolCalls, sessionId, sessionEpoch });
+          const suffix = stderrText ? ` | ${stderrText.substring(0, 300)}` : '';
+          resolve({ error: `codex killed by ${signal}${suffix}`, text: fullText, toolCalls, sessionId, sessionEpoch, shouldFallbackFresh });
         } else {
-          resolve({ text: fullText, toolCalls, sessionId, sessionEpoch });
+          resolve({ text: fullText, toolCalls, sessionId, sessionEpoch, shouldFallbackFresh: false });
         }
       });
 
@@ -1251,6 +1266,18 @@ ${userBlock}`;
         }
       }, 300000);
     });
+
+    const result = await runAttempt(shouldResume ? this._sessionId : null);
+    if (result.shouldFallbackFresh) {
+      this.state.emit('agent_log', {
+        message: '[codex] resume failed, retrying with fresh session for this beat',
+        level: 'warning',
+      });
+      this._sessionId = null;
+      const freshResult = await runAttempt(null);
+      return freshResult;
+    }
+    return result;
   }
 
   /**

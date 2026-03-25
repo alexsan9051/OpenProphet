@@ -632,6 +632,9 @@ export function getResolvedAgentForSandbox(sandboxId) {
 
   const baseAgent = getAgentById(sandbox.agent.activeAgentId) || null;
   const overrides = sandbox.agent?.overrides || {};
+  const resolvedSessionMode = overrides.sessionMode === 'fresh'
+    ? 'fresh'
+    : (overrides.sessionMode === 'continuous' ? 'continuous' : 'continuous');
   const resolved = {
     ...(baseAgent || {}),
     id: sandbox.agent.activeAgentId,
@@ -643,6 +646,7 @@ export function getResolvedAgentForSandbox(sandboxId) {
     sandboxId,
     accountId: sandbox.accountId,
     customStrategyRules: overrides.customStrategyRules ?? null,
+    sessionMode: resolvedSessionMode,
   };
 
   if (overrides.name !== null) resolved.name = overrides.name;
@@ -659,6 +663,12 @@ export function getResolvedAgentForSandbox(sandboxId) {
 export async function updateSandboxAgentOverrides(sandboxId, overrides) {
   const sandbox = getSandbox(sandboxId);
   if (!sandbox) throw new Error('Sandbox not found');
+  const normalizedOverrides = { ...(overrides || {}) };
+  if (Object.prototype.hasOwnProperty.call(normalizedOverrides, 'sessionMode')) {
+    if (normalizedOverrides.sessionMode !== 'continuous' && normalizedOverrides.sessionMode !== 'fresh') {
+      throw new Error('Invalid sessionMode. Use "continuous" or "fresh".');
+    }
+  }
 
   _config.sandboxes[sandboxId] = mergeSandbox({
     ...sandbox,
@@ -666,10 +676,10 @@ export async function updateSandboxAgentOverrides(sandboxId, overrides) {
       ...sandbox.agent,
       overrides: {
         ...(sandbox.agent?.overrides || {}),
-        ...overrides,
+        ...normalizedOverrides,
         heartbeatOverrides: {
           ...(sandbox.agent?.overrides?.heartbeatOverrides || {}),
-          ...(overrides.heartbeatOverrides || {}),
+          ...(normalizedOverrides.heartbeatOverrides || {}),
         },
       },
     },
