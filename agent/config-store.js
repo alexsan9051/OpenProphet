@@ -734,6 +734,17 @@ export async function updateSandboxStrategyRules(sandboxId, rules) {
   return updateSandboxAgentOverrides(sandboxId, { customStrategyRules: rules });
 }
 
+export async function updateSandboxRunnerType(sandboxId, runnerType) {
+  const valid = ['opencode', 'claude-code', 'codex'];
+  if (!valid.includes(runnerType)) throw new Error(`Invalid runnerType. Use: ${valid.join(', ')}`);
+  const sandbox = getSandbox(sandboxId);
+  if (!sandbox) throw new Error('Sandbox not found');
+  _config.sandboxes[sandboxId] = mergeSandbox({ ...sandbox, runnerType }, _config);
+  if (_config.activeSandboxId === sandboxId) syncLegacyAliases(_config);
+  await saveConfig();
+  return _config.sandboxes[sandboxId];
+}
+
 // ── Strategies ─────────────────────────────────────────────────────
 
 export async function addStrategy(strategy) {

@@ -19,7 +19,7 @@ import {
   addAgent, updateAgent, removeAgent, setActiveAgent, getActiveAgent, getAgentById, getResolvedAgentForSandbox,
   addStrategy, updateStrategy, removeStrategy,
   setActiveModel, getStrategyById,
-  updateSandboxAgentOverrides, updateSandboxAgentSelection, updateSandboxStrategyRules,
+  updateSandboxAgentOverrides, updateSandboxAgentSelection, updateSandboxStrategyRules, updateSandboxRunnerType,
   updateHeartbeat, updateHeartbeatForSandbox, getHeartbeatForPhase,
   updatePermissions, updatePermissionsForSandbox, getPermissions, getPermissionsForSandbox,
   updatePlugin, updatePluginForSandbox, getPlugin, getPluginForSandbox,
@@ -1012,6 +1012,16 @@ app.put('/api/sandboxes/:id/strategy-rules', async (req, res) => {
     await refreshHarnessConfigForSandbox(req.params.id, { resetSession: true });
     broadcast('config', safeConfig());
     res.json({ ok: true, sandbox, agent: getResolvedAgentForSandbox(req.params.id) });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.put('/api/sandboxes/:id/runner', async (req, res) => {
+  try {
+    const { runnerType } = req.body || {};
+    const sandbox = await updateSandboxRunnerType(req.params.id, runnerType);
+    await refreshHarnessConfigForSandbox(req.params.id, { resetSession: false });
+    broadcast('config', safeConfig());
+    res.json({ ok: true, sandbox });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 

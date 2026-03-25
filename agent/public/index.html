@@ -1195,6 +1195,10 @@ async function refreshSelectedSandboxConfig() {
     renderPermissions();
     renderSlack();
     renderPromptPreview();
+    const runnerSel = document.querySelector(`[data-stat="${sid}-runner-type"]`);
+    if (runnerSel && data.sandbox?.runnerType) runnerSel.value = data.sandbox.runnerType;
+    const sessionSel = document.querySelector(`[data-stat="${sid}-session-mode"]`);
+    if (sessionSel && data.sandbox?.agent?.overrides?.sessionMode) sessionSel.value = data.sandbox.agent.overrides.sessionMode;
   } catch (e) {
     log('Sandbox config refresh failed: ' + e.message, 'error');
   }
@@ -1910,6 +1914,14 @@ function ensureSandboxTerminal(sandboxId, label) {
             <option value="fresh">Fresh (reset each beat)</option>
           </select>
         </div>
+        <div class="section">
+          <div class="section-title">Runner</div>
+          <select data-stat="${sandboxId}-runner-type" onchange="setRunnerType('${sandboxId}', this.value)" style="width:100%;padding:4px;font-size:11px;background:var(--bg-dark);color:var(--text);border:1px solid var(--border);border-radius:3px">
+            <option value="claude-code">Claude Code</option>
+            <option value="opencode">OpenCode</option>
+            <option value="codex">Codex</option>
+          </select>
+        </div>
       </div>
     </div>
     <div class="chat-input-bar">
@@ -2196,6 +2208,19 @@ async function setSessionMode(sandboxId, mode) {
       body: JSON.stringify({ sessionMode: mode }),
     });
     logToSandbox(sandboxId, `<div class="log-entry success"><span class="time">${fmtTime()}</span>Session mode: ${mode}</div>`);
+  } catch (e) {
+    logToSandbox(sandboxId, `<div class="log-entry error"><span class="time">${fmtTime()}</span>Error: ${esc(e.message)}</div>`);
+  }
+}
+
+async function setRunnerType(sandboxId, type) {
+  try {
+    await fetch('/api/sandboxes/' + encodeURIComponent(sandboxId) + '/runner', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runnerType: type }),
+    });
+    logToSandbox(sandboxId, `<div class="log-entry success"><span class="time">${fmtTime()}</span>Runner: ${type}</div>`);
   } catch (e) {
     logToSandbox(sandboxId, `<div class="log-entry error"><span class="time">${fmtTime()}</span>Error: ${esc(e.message)}</div>`);
   }
