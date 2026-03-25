@@ -3,9 +3,7 @@
     "prophet": {
       "type": "stdio",
       "command": "node",
-      "args": [
-        "/path/to/openprophet/mcp-server.js"
-      ]
+      "args": ["./mcp-server.js"]
     }
   }
 }
