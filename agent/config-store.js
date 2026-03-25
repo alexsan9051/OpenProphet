@@ -222,6 +222,9 @@ function defaultModels() {
     { id: 'anthropic/claude-opus-4-5', name: 'Claude Opus 4.5 (Legacy)', description: 'Previous gen Opus, $5/$25 per MTok' },
     { id: 'anthropic/claude-sonnet-4-0', name: 'Claude Sonnet 4 (Legacy)', description: 'Original Sonnet 4, $3/$15 per MTok' },
     { id: 'anthropic/claude-opus-4-0', name: 'Claude Opus 4 (Legacy)', description: 'Original Opus 4, $15/$75 per MTok' },
+    { id: 'openai/gpt-5.4', name: 'GPT-5.4 (Codex)', description: 'OpenAI flagship via Codex CLI — included in ChatGPT Plus' },
+    { id: 'openai/gpt-5.3-codex', name: 'GPT-5.3 Codex (Codex)', description: 'OpenAI coding model via Codex CLI' },
+    { id: 'openai/gpt-5.4-mini', name: 'GPT-5.4 Mini (Codex)', description: 'Fast OpenAI model via Codex CLI' },
   ];
 }
 
@@ -242,6 +245,7 @@ function createSandbox(account, overrides = {}) {
     heartbeat: { ...DEFAULT_HEARTBEAT, ...(overrides.heartbeat || {}) },
     permissions: { ...DEFAULT_PERMISSIONS, ...(overrides.permissions || {}) },
     plugins: mergePlugins(overrides.plugins || {}),
+    runnerType: overrides.runnerType || 'opencode',
     createdAt: overrides.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -305,6 +309,7 @@ function mergeSandbox(sandbox, fallback = {}) {
     heartbeat: { ...DEFAULT_HEARTBEAT, ...(fallback.heartbeat || {}), ...(sandbox?.heartbeat || {}) },
     permissions: { ...DEFAULT_PERMISSIONS, ...(fallback.permissions || {}), ...(sandbox?.permissions || {}) },
     plugins: mergePlugins({ ...(fallback.plugins || {}), ...(sandbox?.plugins || {}) }),
+    runnerType: sandbox?.runnerType || 'opencode',
   };
 }
 

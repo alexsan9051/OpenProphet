@@ -109,15 +109,25 @@ Heartbeat control:
 
 // ── Check CLI auth ─────────────────────────────────────────────────
 export function checkCliAuth() {
-  // API key in env takes precedence — OpenCode picks it up automatically
+  // API keys in env take precedence
   if (process.env.ANTHROPIC_API_KEY) return true;
+  if (process.env.OPENAI_API_KEY) return true;
+  // OpenCode OAuth
   try {
     const out = execSync('opencode auth list 2>&1', { timeout: 5000, encoding: 'utf-8' });
-    // Look for Anthropic credential (oauth or env) in the output
-    return out.includes('Anthropic');
-  } catch {
-    return false;
-  }
+    if (out.includes('Anthropic')) return true;
+  } catch {}
+  // Claude Code CLI
+  try {
+    execSync('claude --version 2>&1', { timeout: 5000, encoding: 'utf-8' });
+    return true;
+  } catch {}
+  // Codex CLI
+  try {
+    execSync('codex --version 2>&1', { timeout: 5000, encoding: 'utf-8' });
+    return true;
+  } catch {}
+  return false;
 }
 
 // ── Agent State ────────────────────────────────────────────────────
@@ -264,7 +274,7 @@ export class AgentHarness {
 
     // Check CLI auth
     if (!this.checkCliAuthFn()) {
-      throw new Error('OpenCode not authenticated. Run "opencode auth login" or set ANTHROPIC_API_KEY in .env');
+      throw new Error('No AI runner authenticated. Run "opencode auth login" or "claude login", or set ANTHROPIC_API_KEY / OPENAI_API_KEY in .env');
     }
 
     await this.reloadConfig({ resetSession: true, silent: true });
@@ -631,9 +641,19 @@ ${userBlock}`;
   }
 
   /**
-   * Run opencode as subprocess with MCP tools and stream JSON events
+   * Route to the configured runner subprocess (opencode | claude-code | codex)
    */
   _runClaude(prompt, model) {
+    const runnerType = this._sandboxConfig?.runnerType || 'opencode';
+    if (runnerType === 'claude-code') return this._runClaudeCodeRunner(prompt, model);
+    if (runnerType === 'codex') return this._runCodexRunner(prompt, model);
+    return this._runOpenCodeRunner(prompt, model);
+  }
+
+  /**
+   * Run opencode as subprocess with MCP tools and stream JSON events
+   */
+  _runOpenCodeRunner(prompt, model) {
     return new Promise((resolve, reject) => {
       const sessionEpoch = this._sessionEpoch;
       // OpenCode model format: anthropic/claude-sonnet-4-6
@@ -855,6 +875,406 @@ ${userBlock}`;
       case 'step_start':
         // Just informational, nothing to do
         break;
+    }
+  }
+
+  // ── Claude Code Runner ─────────────────────────────────────────────
+
+  /**
+   * Run `claude --print --output-format stream-json` as subprocess.
+   * Uses the user's Claude Pro/Max subscription — no extra per-token cost.
+   */
+  _runClaudeCodeRunner(prompt, model) {
+    return new Promise((resolve, reject) => {
+      const sessionEpoch = this._sessionEpoch;
+      // Claude Code uses model names without the provider prefix
+      const ccModel = (model || 'claude-sonnet-4-6').replace(/^anthropic\//, '');
+
+      const perms = this._resolvePermissions();
+      const args = ['--print', '--output-format', 'stream-json', '--model', ccModel];
+
+      if (this._sessionId) {
+        args.push('--resume', this._sessionId);
+      }
+      if (perms.maxToolRoundsPerBeat) {
+        args.push('--max-turns', String(perms.maxToolRoundsPerBeat));
+      }
+
+      const isNewSession = !this._sessionId;
+      const fullPrompt = isNewSession
+        ? `[SYSTEM INSTRUCTIONS - Follow these at all times]\n${this.systemPrompt}\n\n[END SYSTEM INSTRUCTIONS]\n\n${prompt}`
+        : prompt;
+
+      if (!this._isMessageBeat) {
+        this.state.emit('agent_log', { message: `Spawning claude (${ccModel})...`, level: 'info' });
+      }
+
+      const proc = spawn('claude', args, {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          ...this.opencodeEnv,
+          OPENPROPHET_SANDBOX_ID: this.sandboxId || '',
+          OPENPROPHET_ACCOUNT_ID: this.state.activeAccountId || this.accountId || '',
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      this._proc = proc;
+      this._interrupted = false;
+
+      proc.stdin.on('error', (err) => {
+        this.state.emit('agent_log', { message: `stdin error: ${err.message}`, level: 'error' });
+      });
+      proc.stdin.write(fullPrompt);
+      proc.stdin.end();
+
+      let fullText = '';
+      let toolCalls = 0;
+      let sessionId = null;
+      let buffer = '';
+      let totalCost = 0;
+      let totalTokens = 0;
+      const toolCallMap = {}; // tool_use_id -> display name
+
+      proc.stdout.on('data', (chunk) => {
+        buffer += chunk.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const event = JSON.parse(line);
+            this._handleClaudeCodeEvent(event, {
+              addToolCall: () => toolCalls++,
+              addText: (t) => { fullText += t; },
+              setSession: (id) => { sessionId = id; },
+              addCost: (c) => { totalCost += c; },
+              addTokens: (t) => { totalTokens += t; },
+              toolCallMap,
+            });
+          } catch { /* skip unparseable lines */ }
+        }
+      });
+
+      proc.stderr.on('data', (chunk) => {
+        const msg = chunk.toString().trim();
+        if (msg) this.state.emit('agent_log', { message: `[claude] ${msg}`, level: 'info' });
+      });
+
+      proc.on('error', (err) => {
+        reject(new Error(`Failed to spawn claude: ${err.message}`));
+      });
+
+      proc.on('exit', (code, signal) => {
+        this._proc = null;
+        if (this._beatTimeout) { clearTimeout(this._beatTimeout); this._beatTimeout = null; }
+
+        if (buffer.trim()) {
+          try {
+            const event = JSON.parse(buffer);
+            this._handleClaudeCodeEvent(event, {
+              addToolCall: () => toolCalls++,
+              addText: (t) => { fullText += t; },
+              setSession: (id) => { sessionId = id; },
+              addCost: (c) => { totalCost += c; },
+              addTokens: (t) => { totalTokens += t; },
+              toolCallMap,
+            });
+          } catch {}
+        }
+
+        if (totalCost > 0) {
+          this.state.emit('agent_log', {
+            message: `Beat cost: $${totalCost.toFixed(4)} | Tokens: ${totalTokens}`,
+            level: 'info',
+          });
+        }
+
+        if (this._interrupted) {
+          this.state.emit('agent_log', {
+            message: `Beat interrupted by user (${fullText.length} chars, ${toolCalls} tools)`,
+            level: 'warning',
+          });
+          resolve({ text: fullText, toolCalls, sessionId, interrupted: true, sessionEpoch });
+          return;
+        }
+
+        this.state.emit('agent_log', {
+          message: `claude exited (code: ${code}, signal: ${signal}, text: ${fullText.length} chars, tools: ${toolCalls})`,
+          level: code === 0 ? 'info' : 'warning',
+        });
+
+        if (code !== 0 && code !== null && !fullText) {
+          resolve({ error: `claude exited with code ${code} signal ${signal}`, text: fullText, toolCalls, sessionId, sessionEpoch });
+        } else if (signal && !fullText) {
+          resolve({ error: `claude killed by ${signal}`, text: fullText, toolCalls, sessionId, sessionEpoch });
+        } else {
+          resolve({ text: fullText, toolCalls, sessionId, sessionEpoch });
+        }
+      });
+
+      this._beatTimeout = setTimeout(() => {
+        if (proc && !proc.killed) {
+          this.state.emit('agent_log', { message: 'Beat timed out (5 min max), killing process.', level: 'warning' });
+          proc.kill('SIGTERM');
+        }
+      }, 300000);
+    });
+  }
+
+  /**
+   * Handle Claude Code `--output-format stream-json` events.
+   * Each line is a JSONL object: system (init), assistant (text+tool_use), user (tool_result), result (cost).
+   */
+  _handleClaudeCodeEvent(event, ctx) {
+    const beatNum = this.state.beatCount;
+
+    // Capture session_id from any event that includes it
+    if (event.session_id) ctx.setSession(event.session_id);
+
+    switch (event.type) {
+      case 'assistant': {
+        const content = event.message?.content || [];
+        for (const block of content) {
+          if (block.type === 'text' && block.text?.trim()) {
+            ctx.addText(block.text);
+            this.state.emit('agent_text', { text: block.text, beat: beatNum });
+          } else if (block.type === 'tool_use') {
+            const toolName = (block.name || '??').replace(/^prophet__/, '');
+            const fullToolName = block.name || toolName;
+            const toolInput = block.input || {};
+            if (block.id) ctx.toolCallMap[block.id] = toolName;
+
+            ctx.addToolCall();
+            this.state.stats.toolCalls++;
+            this.state.emit('tool_call', { name: toolName, args: toolInput, beat: beatNum });
+
+            if (fullToolName.includes('buy') || fullToolName.includes('sell') || fullToolName.includes('order') || fullToolName.includes('managed')) {
+              this.state.stats.trades++;
+              this.state.addTrade({
+                type: 'order',
+                tool: toolName,
+                symbol: toolInput.symbol || '??',
+                side: toolInput.side || (fullToolName.includes('buy') ? 'buy' : 'sell'),
+                quantity: toolInput.quantity || toolInput.qty,
+                price: toolInput.limit_price,
+              });
+            }
+          }
+        }
+        break;
+      }
+
+      case 'user': {
+        const content = event.message?.content || [];
+        for (const block of content) {
+          if (block.type === 'tool_result') {
+            const name = ctx.toolCallMap?.[block.tool_use_id] || 'tool';
+            const resultStr = typeof block.content === 'string' ? block.content : JSON.stringify(block.content);
+            this.state.emit('tool_result', { name, result: resultStr.substring(0, 500), beat: beatNum });
+          }
+        }
+        break;
+      }
+
+      case 'result': {
+        if (event.total_cost_usd) ctx.addCost(event.total_cost_usd);
+        const usage = event.usage || {};
+        const tokens = (usage.input_tokens || 0) + (usage.output_tokens || 0);
+        if (tokens) ctx.addTokens(tokens);
+        break;
+      }
+    }
+  }
+
+  // ── Codex Runner ───────────────────────────────────────────────────
+
+  /**
+   * Run `codex exec --json` as subprocess.
+   * Uses the user's ChatGPT Plus subscription — no extra per-token cost.
+   * Note: Codex does not support simple session IDs; each beat starts fresh.
+   */
+  async _runCodexRunner(prompt, model) {
+    // Write system prompt to a file so Codex can load it via --model-instructions-file
+    const instructionsPath = path.join(process.cwd(), 'data', 'codex-instructions.md');
+    await fs.mkdir(path.dirname(instructionsPath), { recursive: true });
+    await fs.writeFile(instructionsPath, this.systemPrompt);
+
+    return new Promise((resolve, reject) => {
+      const sessionEpoch = this._sessionEpoch;
+      // Codex uses model names without the provider prefix
+      const codexModel = (model || 'gpt-5.4').replace(/^openai\//, '');
+
+      const args = [
+        'exec', '--json',
+        '--model', codexModel,
+        '-a', 'never',
+        '--model-instructions-file', instructionsPath,
+        prompt,
+      ];
+
+      if (!this._isMessageBeat) {
+        this.state.emit('agent_log', { message: `Spawning codex (${codexModel})...`, level: 'info' });
+      }
+
+      const proc = spawn('codex', args, {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          ...this.opencodeEnv,
+          OPENPROPHET_SANDBOX_ID: this.sandboxId || '',
+          OPENPROPHET_ACCOUNT_ID: this.state.activeAccountId || this.accountId || '',
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      this._proc = proc;
+      this._interrupted = false;
+
+      let fullText = '';
+      let toolCalls = 0;
+      let sessionId = null;
+      let buffer = '';
+      let totalTokens = 0;
+
+      proc.stdout.on('data', (chunk) => {
+        buffer += chunk.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const event = JSON.parse(line);
+            this._handleCodexEvent(event, {
+              addToolCall: () => toolCalls++,
+              addText: (t) => { fullText += t; },
+              setSession: (id) => { sessionId = id; },
+              addTokens: (t) => { totalTokens += t; },
+            });
+          } catch { /* skip unparseable lines */ }
+        }
+      });
+
+      proc.stderr.on('data', (chunk) => {
+        const msg = chunk.toString().trim();
+        if (msg) this.state.emit('agent_log', { message: `[codex] ${msg}`, level: 'info' });
+      });
+
+      proc.on('error', (err) => {
+        reject(new Error(`Failed to spawn codex: ${err.message}`));
+      });
+
+      proc.on('exit', (code, signal) => {
+        this._proc = null;
+        if (this._beatTimeout) { clearTimeout(this._beatTimeout); this._beatTimeout = null; }
+
+        if (buffer.trim()) {
+          try {
+            const event = JSON.parse(buffer);
+            this._handleCodexEvent(event, {
+              addToolCall: () => toolCalls++,
+              addText: (t) => { fullText += t; },
+              setSession: (id) => { sessionId = id; },
+              addTokens: (t) => { totalTokens += t; },
+            });
+          } catch {}
+        }
+
+        if (totalTokens > 0) {
+          this.state.emit('agent_log', {
+            message: `Beat tokens: ${totalTokens}`,
+            level: 'info',
+          });
+        }
+
+        if (this._interrupted) {
+          this.state.emit('agent_log', {
+            message: `Beat interrupted by user (${fullText.length} chars, ${toolCalls} tools)`,
+            level: 'warning',
+          });
+          resolve({ text: fullText, toolCalls, sessionId, interrupted: true, sessionEpoch });
+          return;
+        }
+
+        this.state.emit('agent_log', {
+          message: `codex exited (code: ${code}, signal: ${signal}, text: ${fullText.length} chars, tools: ${toolCalls})`,
+          level: code === 0 ? 'info' : 'warning',
+        });
+
+        if (code !== 0 && code !== null && !fullText) {
+          resolve({ error: `codex exited with code ${code} signal ${signal}`, text: fullText, toolCalls, sessionId, sessionEpoch });
+        } else if (signal && !fullText) {
+          resolve({ error: `codex killed by ${signal}`, text: fullText, toolCalls, sessionId, sessionEpoch });
+        } else {
+          resolve({ text: fullText, toolCalls, sessionId, sessionEpoch });
+        }
+      });
+
+      this._beatTimeout = setTimeout(() => {
+        if (proc && !proc.killed) {
+          this.state.emit('agent_log', { message: 'Beat timed out (5 min max), killing process.', level: 'warning' });
+          proc.kill('SIGTERM');
+        }
+      }, 300000);
+    });
+  }
+
+  /**
+   * Handle Codex `--json` (JSONL) stream events.
+   * thread.started → capture thread_id as session
+   * item.completed (agent_message) → text output
+   * item.completed (mcp_tool_call) → tool call + result
+   * turn.completed → token usage
+   */
+  _handleCodexEvent(event, ctx) {
+    const beatNum = this.state.beatCount;
+
+    switch (event.type) {
+      case 'thread.started': {
+        if (event.thread_id) ctx.setSession(event.thread_id);
+        break;
+      }
+
+      case 'item.completed': {
+        const item = event.item || {};
+        if (item.type === 'agent_message' && item.text?.trim()) {
+          ctx.addText(item.text);
+          this.state.emit('agent_text', { text: item.text, beat: beatNum });
+        } else if (item.type === 'mcp_tool_call') {
+          const toolName = (item.tool || '??').replace(/^prophet__/, '');
+          const fullToolName = item.tool || toolName;
+          const toolInput = item.input || {};
+          const toolOutput = item.output || '';
+
+          ctx.addToolCall();
+          this.state.stats.toolCalls++;
+          this.state.emit('tool_call', { name: toolName, args: toolInput, beat: beatNum });
+
+          const resultStr = typeof toolOutput === 'string' ? toolOutput : JSON.stringify(toolOutput);
+          this.state.emit('tool_result', { name: toolName, result: resultStr.substring(0, 500), beat: beatNum });
+
+          if (fullToolName.includes('buy') || fullToolName.includes('sell') || fullToolName.includes('order') || fullToolName.includes('managed')) {
+            this.state.stats.trades++;
+            this.state.addTrade({
+              type: 'order',
+              tool: toolName,
+              symbol: toolInput.symbol || '??',
+              side: toolInput.side || (fullToolName.includes('buy') ? 'buy' : 'sell'),
+              quantity: toolInput.quantity || toolInput.qty,
+              price: toolInput.limit_price,
+            });
+          }
+        }
+        break;
+      }
+
+      case 'turn.completed': {
+        const usage = event.usage || {};
+        const tokens = (usage.input_tokens || 0) + (usage.output_tokens || 0);
+        if (tokens) ctx.addTokens(tokens);
+        break;
+      }
     }
   }
 }
